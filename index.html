@@ -112,7 +112,7 @@
 
 <div class="pop" id="alerts">
   <button class="add" id="muteBtn" style="width:100%;margin-bottom:6px"></button>
-  <button class="add" id="confBtn" style="width:100%;margin-bottom:6px">🔗 New confluence alert</button>
+  <button class="add" id="confBtn" style="width:100%;margin-bottom:6px">🔗 New indicator / confluence alert</button>
   <button class="add" id="testBtn" style="width:100%;margin-bottom:6px">Send test Telegram alert</button>
   <div id="testRes" class="mut" style="margin-bottom:8px"></div>
   <div class="mut" style="margin-bottom:6px">─ tool adds a level · 🔔 toggles its alert · ✔on close = candle-close confirm</div>
@@ -120,7 +120,7 @@
 </div>
 
 <div class="pop" id="confPop">
-  <div style="font-weight:600;margin-bottom:8px">Confluence alert — fires when ALL conditions are met</div>
+  <div style="font-weight:600;margin-bottom:8px">Indicator alert — 1 condition, or add more for a confluence (fires when ALL are met)</div>
   <div class="pp"><div><label>Timeframe</label><select id="confTf"><option>5m</option><option>1h</option><option selected>4h</option><option value="1d">D</option></select></div>
   <div><label>Repeat</label><select id="confRepeat"><option value="always">every time</option><option value="once">1 time</option></select></div></div>
   <label style="margin-top:8px"><input type="checkbox" id="confClose" checked> candle-close confirmation</label>
@@ -295,9 +295,9 @@ const COND_TYPES={
 function condText(c){const t=c.type,op=c.op;if(t==="price")return`px${op}${c.value}`;if(t==="funding")return`fund${op}${c.value}`;if(t==="oi")return`OI${op}${c.value}`;if(t==="vwap")return`px${op}VWAP(${c.anchor||"week"})`;if(t==="ema")return`px${op}EMA${c.period||45}`;if(t==="rsi")return`RSI${op}${c.value}`;if(t==="pattern")return`🕯${c.name}`;return t;}
 function renderCondFields(box,type){box.innerHTML="";COND_TYPES[type].fields.forEach(fl=>{let el;if(fl.sel){el=document.createElement("select");el.innerHTML=fl.sel.map(o=>`<option>${o}</option>`).join("");}else{el=document.createElement("input");el.type="number";el.placeholder=fl.ph||"";if(fl.def!=null)el.value=fl.def;}el.dataset.k=fl.k;el.className="cf";box.appendChild(el);});}
 function condRow(){const w=document.createElement("div");w.className="condrow";const ts=document.createElement("select");ts.className="ctype";ts.innerHTML=Object.entries(COND_TYPES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join("");const fields=document.createElement("span");fields.className="cfields";const rm=document.createElement("span");rm.className="cx";rm.textContent="✕";rm.onclick=()=>w.remove();ts.onchange=()=>renderCondFields(fields,ts.value);w.appendChild(ts);w.appendChild(fields);w.appendChild(rm);renderCondFields(fields,ts.value);return w;}
-function openConf(){document.getElementById("alerts").classList.remove("on");const box=document.getElementById("confRows");box.innerHTML="";box.appendChild(condRow());box.appendChild(condRow());document.getElementById("confErr").textContent="";document.getElementById("confPop").classList.add("on");}
+function openConf(){document.getElementById("alerts").classList.remove("on");const box=document.getElementById("confRows");box.innerHTML="";box.appendChild(condRow());document.getElementById("confErr").textContent="";document.getElementById("confPop").classList.add("on");}
 function closeConf(){document.getElementById("confPop").classList.remove("on");}
-function saveConf(){const rows=[...document.querySelectorAll("#confRows .condrow")];const err=document.getElementById("confErr");if(rows.length<2){err.textContent="Need at least 2 conditions.";return;}if(rows.length>5){err.textContent="Max 5 conditions.";return;}const conditions=rows.map(r=>{const c={type:r.querySelector(".ctype").value};r.querySelectorAll(".cf").forEach(el=>{c[el.dataset.k]=el.tagName==="SELECT"?el.value:parseFloat(el.value);});return c;});for(const c of conditions){if(("value" in c)&&isNaN(c.value)){err.textContent="Fill in all condition values.";return;}}
+function saveConf(){const rows=[...document.querySelectorAll("#confRows .condrow")];const err=document.getElementById("confErr");if(rows.length<1){err.textContent="Add at least 1 condition.";return;}if(rows.length>5){err.textContent="Max 5 conditions.";return;}const conditions=rows.map(r=>{const c={type:r.querySelector(".ctype").value};r.querySelectorAll(".cf").forEach(el=>{c[el.dataset.k]=el.tagName==="SELECT"?el.value:parseFloat(el.value);});return c;});for(const c of conditions){if(("value" in c)&&isNaN(c.value)){err.textContent="Fill in all condition values.";return;}}
   fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coin,kind:"confluence",timeframe:document.getElementById("confTf").value,confirm:document.getElementById("confClose").checked?"close":"intrabar",repeat:document.getElementById("confRepeat").value,note:document.getElementById("confNote").value,conditions,alert_enabled:true})}).then(r=>r.json()).then(l=>{levels.push(l);renderAlerts();closeConf();document.getElementById("alerts").classList.add("on");});}
 
 function init(){mkChart();fillTypes();chips();
