@@ -1,0 +1,25 @@
+# Caddy reverse proxy: automatic HTTPS (Let's Encrypt) + password protection.
+# Only needed for OPTION B (public access). Replace the domain + password hash.
+#
+# Generate the hash on the server with:
+#   caddy hash-password
+# then paste it after the username below.
+
+chart.example.com {
+    encode gzip
+
+    basic_auth {
+        # username   bcrypt-hash-from-"caddy hash-password"
+        trader $2a$14$REPLACE_THIS_WITH_YOUR_BCRYPT_HASH
+    }
+
+    # security headers
+    header {
+        Strict-Transport-Security "max-age=31536000;"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+        -Server
+    }
+
+    reverse_proxy 127.0.0.1:8000
+}
