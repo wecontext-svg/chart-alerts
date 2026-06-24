@@ -138,6 +138,26 @@ def muted():
     return bool(SETTINGS.get("muted"))
 
 
+# INDICATORS are the chart overlays (VWAP/EMA/etc). Stored server-side so the
+# same setup shows on every device, instead of per-browser localStorage.
+INDICATORS_FILE = STATE_DIR / "indicators.json"
+
+
+def load_indicators():
+    if INDICATORS_FILE.exists():
+        try:
+            data = json.loads(INDICATORS_FILE.read_text())
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+    return None
+
+
+def save_indicators(inds):
+    INDICATORS_FILE.write_text(json.dumps(inds, indent=2))
+
+
 # ---------- HTTP handlers ----------
 async def index(request):
     return web.FileResponse(BASE / "index.html")
@@ -257,6 +277,18 @@ async def api_mute(request):
         SETTINGS["muted"] = bool(b.get("muted"))
         save_settings()
     return web.json_response({"muted": muted()})
+
+
+async def api_indicators(request):
+    """GET -> saved chart indicators (list, or null if none saved yet);
+    PUT [..] -> replace the whole list. Shared across all devices."""
+    if request.method == "PUT":
+        b = await request.json()
+        if not isinstance(b, list):
+            return web.json_response({"error": "expected a list"}, status=400)
+        save_indicators(b)
+        return web.json_response(b)
+    return web.json_response(load_indicators())
 
 
 async def api_test(request):
@@ -644,6 +676,8 @@ def make_app():
         web.post("/api/test", api_test),
         web.get("/api/mute", api_mute),
         web.post("/api/mute", api_mute),
+        web.get("/api/indicators", api_indicators),
+        web.put("/api/indicators", api_indicators),
     ])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
