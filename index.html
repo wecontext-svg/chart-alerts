@@ -120,7 +120,7 @@
 </div>
 
 <div class="pop" id="confPop">
-  <div style="font-weight:600;margin-bottom:8px">Indicator alert — 1 condition, or add more for a confluence (fires when ALL are met)</div>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px"><span style="font-weight:600">Indicator alert — 1 condition, or add more for a confluence (fires when ALL are met)</span><span class="cx" id="confX" style="cursor:pointer;font-size:16px;padding:0 4px;flex:0 0 auto">✕</span></div>
   <div class="pp"><div><label>Timeframe</label><select id="confTf"><option>5m</option><option>1h</option><option selected>4h</option><option value="1d">D</option></select></div>
   <div><label>Repeat</label><select id="confRepeat"><option value="always">every time</option><option value="once">1 time</option></select></div></div>
   <label style="margin-top:8px"><input type="checkbox" id="confClose" checked> candle-close confirmation</label>
@@ -231,7 +231,11 @@ function live(d){const b={time:Math.floor(d.t/1000),open:+d.o,high:+d.h,low:+d.l
 
 /* ---- indicators persist + chips ---- */
 function load(){try{const s=JSON.parse(localStorage.getItem("hl_inds"));if(Array.isArray(s)&&s.length)return s;}catch(e){}return[{id:id(),type:"vwap",params:{},color:"#ab47bc",visible:true},{id:id(),type:"ema",params:{period:45},color:"#f5a623",visible:true}];}
-const save=()=>localStorage.setItem("hl_inds",JSON.stringify(inds));
+function save(){localStorage.setItem("hl_inds",JSON.stringify(inds));fetch("/api/indicators",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(inds)}).catch(()=>{});}
+async function loadIndicators(){try{const s=await(await fetch("/api/indicators")).json();
+  if(Array.isArray(s)&&s.length){inds.forEach(ind=>(sMap[ind.id]||[]).forEach(x=>{try{chart.removeSeries(x);}catch(e){}}));sMap={};inds=s;localStorage.setItem("hl_inds",JSON.stringify(inds));chips();buildAll();}
+  else{save();}  /* nothing saved server-side yet -> migrate this device's set up */
+}catch(e){}}
 function id(){return "i"+Math.random().toString(36).slice(2,8);}
 function chips(){const c=document.getElementById("chips");c.innerHTML="";inds.forEach(ind=>{const t=ITYPES[ind.type],e=document.createElement("span");e.className="chip"+(ind.visible?"":" off");e.innerHTML=`<span class="sw" style="background:${ind.color}"></span>${t.lab(ind.params)}<span class="x">✕</span>`;e.querySelector(".x").onclick=ev=>{ev.stopPropagation();inds=inds.filter(x=>x.id!==ind.id);(sMap[ind.id]||[]).forEach(s=>{try{chart.removeSeries(s);}catch(e){}});save();chips();};e.onclick=()=>openPop(ind.id,e);c.appendChild(e);});}
 
@@ -314,11 +318,12 @@ function init(){mkChart();fillTypes();chips();
   document.getElementById("confBtn").onclick=openConf;
   document.getElementById("confAdd").onclick=()=>{if(document.querySelectorAll("#confRows .condrow").length<5)document.getElementById("confRows").appendChild(condRow());};
   document.getElementById("confSave").onclick=saveConf;
+  document.getElementById("confX").onclick=closeConf;
   loadMute();
   document.getElementById("testBtn").onclick=async()=>{const r=document.getElementById("testRes");r.textContent="sending…";try{const d=await(await fetch("/api/test",{method:"POST"})).json();r.textContent=(d.ok?"✅ ":"⚠️ ")+d.detail;r.style.color=d.ok?"#26a69a":"#ef5350";}catch(e){r.textContent="⚠️ "+e;r.style.color="#ef5350";}};
   document.addEventListener("keydown",e=>{if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT")return;const m={"1":"5m","2":"1h","3":"4h","4":"1d"};if(m[e.key])setTF(m[e.key]);const tk={t:"trend",r:"ray",e:"extended",m:"measure",f:"fib",a:"vwapanchor",h:"level",c:"cursor"};if(tk[e.key])setTool(tk[e.key]);if(e.key==="i")document.getElementById("addBtn").click();if(e.key==="Escape"){closePop();closeConf();clearMeasure();setTool("cursor");document.getElementById("alerts").classList.remove("on");}});
   document.addEventListener("click",e=>{const p=document.getElementById("indPop");if(p.classList.contains("on")&&!p.contains(e.target)&&e.target.id!=="addBtn"&&!e.target.closest(".chip"))closePop();});
-  load_().then(loadLevels).then(connect);}
+  load_().then(loadIndicators).then(loadLevels).then(connect);}
 function setTF(i){interval=i;document.querySelectorAll("#tf b").forEach(x=>x.classList.toggle("on",x.dataset.i===i));load_().then(connect);}
 init();
 </script>
