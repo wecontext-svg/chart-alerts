@@ -295,15 +295,15 @@ function renderMute(){const b=document.getElementById("muteBtn");if(b){b.textCon
 
 // ---------- confluence builder ----------
 const COND_TYPES={
- price:{label:"Price",fields:[{k:"op",sel:[">","<"]},{k:"value",ph:"value"}]},
- vwap:{label:"vs VWAP",fields:[{k:"op",sel:[">","<"]},{k:"anchor",sel:["session","week","month"]}]},
- ema:{label:"vs EMA",fields:[{k:"op",sel:[">","<"]},{k:"period",def:45}]},
- rsi:{label:"RSI",fields:[{k:"op",sel:[">","<"]},{k:"value",ph:"e.g.35"},{k:"period",def:14}]},
- funding:{label:"Funding",fields:[{k:"op",sel:[">","<"]},{k:"value",def:0}]},
+ price:{label:"Price",fields:[{k:"op",sel:[{v:">",l:"crosses above ↑"},{v:"<",l:"crosses below ↓"}]},{k:"value",ph:"value"}]},
+ vwap:{label:"vs VWAP",fields:[{k:"op",sel:[{v:">",l:"crosses above ↑"},{v:"<",l:"crosses below ↓"}]},{k:"anchor",sel:["session","week","month"]}]},
+ ema:{label:"vs EMA",fields:[{k:"op",sel:[{v:">",l:"crosses above ↑"},{v:"<",l:"crosses below ↓"}]},{k:"period",def:45}]},
+ rsi:{label:"RSI",fields:[{k:"op",sel:[{v:">",l:"crosses above ↑"},{v:"<",l:"crosses below ↓"}]},{k:"value",ph:"e.g.35"},{k:"period",def:14}]},
+ funding:{label:"Funding",fields:[{k:"op",sel:[{v:">",l:"crosses above ↑"},{v:"<",l:"crosses below ↓"}]},{k:"value",def:0}]},
  pattern:{label:"Candle",fields:[{k:"name",sel:["bull_engulf","bear_engulf","hammer","shooting_star","doji","three_white_soldiers","three_black_crows"]}]},
 };
-function condText(c){const t=c.type,op=c.op;if(t==="price")return`px${op}${c.value}`;if(t==="funding")return`fund${op}${c.value}`;if(t==="oi")return`OI${op}${c.value}`;if(t==="vwap")return`px${op}VWAP(${c.anchor||"week"})`;if(t==="ema")return`px${op}EMA${c.period||45}`;if(t==="rsi")return`RSI${op}${c.value}`;if(t==="pattern")return`🕯${c.name}`;return t;}
-function renderCondFields(box,type){box.innerHTML="";COND_TYPES[type].fields.forEach(fl=>{let el;if(fl.sel){el=document.createElement("select");el.innerHTML=fl.sel.map(o=>`<option>${o}</option>`).join("");}else{el=document.createElement("input");el.type="number";el.placeholder=fl.ph||"";if(fl.def!=null)el.value=fl.def;}el.dataset.k=fl.k;el.className="cf";box.appendChild(el);});}
+function condText(c){const t=c.type,a=c.op==="<"?"crosses below":"crosses above";if(t==="price")return`price ${a} ${c.value}`;if(t==="funding")return`funding ${a} ${c.value}`;if(t==="oi")return`OI ${a} ${c.value}`;if(t==="vwap")return`price ${a} VWAP(${c.anchor||"week"})`;if(t==="ema")return`price ${a} EMA${c.period||45}`;if(t==="rsi")return`RSI ${a} ${c.value}`;if(t==="pattern")return`🕯 ${c.name}`;return t;}
+function renderCondFields(box,type){box.innerHTML="";COND_TYPES[type].fields.forEach(fl=>{let el;if(fl.sel){el=document.createElement("select");el.innerHTML=fl.sel.map(o=>typeof o==="object"?`<option value="${o.v}">${o.l}</option>`:`<option>${o}</option>`).join("");}else{el=document.createElement("input");el.type="number";el.placeholder=fl.ph||"";if(fl.def!=null)el.value=fl.def;}el.dataset.k=fl.k;el.className="cf";box.appendChild(el);});}
 function condRow(){const w=document.createElement("div");w.className="condrow";const ts=document.createElement("select");ts.className="ctype";ts.innerHTML=Object.entries(COND_TYPES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join("");const fields=document.createElement("span");fields.className="cfields";const rm=document.createElement("span");rm.className="cx";rm.textContent="✕";rm.onclick=()=>w.remove();ts.onchange=()=>renderCondFields(fields,ts.value);w.appendChild(ts);w.appendChild(fields);w.appendChild(rm);renderCondFields(fields,ts.value);return w;}
 function openConf(){document.getElementById("alerts").classList.remove("on");const box=document.getElementById("confRows");box.innerHTML="";box.appendChild(condRow());document.getElementById("confErr").textContent="";document.getElementById("confPop").classList.add("on");}
 function closeConf(){document.getElementById("confPop").classList.remove("on");}
