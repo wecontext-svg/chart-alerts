@@ -174,8 +174,9 @@ function comp(ind){const p=ind.params,c=ind.color;
   return[];}
 
 /* ---- indicator series ---- */
-function build(ind){(sMap[ind.id]||[]).forEach(s=>{try{chart.removeSeries(s);}catch(e){}});sMap[ind.id]=[];if(!ind.visible)return;const low=ITYPES[ind.type].pane==="lower";comp(ind).forEach(o=>{let s;if(o.k==="h")s=chart.addHistogramSeries({priceScaleId:low?ind.id:"right",color:o.c});else s=chart.addLineSeries({priceScaleId:low?ind.id:"right",color:o.c,lineWidth:o.w||1.5,priceLineVisible:false,lastValueVisible:false});s.setData(o.d);sMap[ind.id].push(s);});if(low)chart.priceScale(ind.id).applyOptions({scaleMargins:{top:.82,bottom:.02}});}
-function refresh(ind){if(!ind.visible)return;const h=sMap[ind.id];if(!h)return build(ind);const o=comp(ind);if(o.length!==h.length)return build(ind);o.forEach((x,i)=>h[i].setData(x.d));}
+const shown=ind=>ind.visible&&(!ind.coin||ind.coin===coin);  /* generic inds are global; anchored VWAP is pinned to the coin it was drawn on */
+function build(ind){(sMap[ind.id]||[]).forEach(s=>{try{chart.removeSeries(s);}catch(e){}});sMap[ind.id]=[];if(!shown(ind))return;const low=ITYPES[ind.type].pane==="lower";comp(ind).forEach(o=>{let s;if(o.k==="h")s=chart.addHistogramSeries({priceScaleId:low?ind.id:"right",color:o.c});else s=chart.addLineSeries({priceScaleId:low?ind.id:"right",color:o.c,lineWidth:o.w||1.5,priceLineVisible:false,lastValueVisible:false});s.setData(o.d);sMap[ind.id].push(s);});if(low)chart.priceScale(ind.id).applyOptions({scaleMargins:{top:.82,bottom:.02}});}
+function refresh(ind){if(!shown(ind))return;const h=sMap[ind.id];if(!h)return build(ind);const o=comp(ind);if(o.length!==h.length)return build(ind);o.forEach((x,i)=>h[i].setData(x.d));}
 const buildAll=()=>inds.forEach(build),refreshAll=()=>inds.forEach(refresh);
 
 /* ---- chart ---- */
@@ -206,7 +207,7 @@ function drawMeasure(M){const x1=xAt(M.p1.t),y1=yAt(M.p1.price),x2=xAt(M.p2.t),y
 function drawFib(l){const x0=xAt(l.p1.t);if(x0==null)return;const W=document.getElementById("chart").clientWidth,X=Math.max(x0,0);octx.save();octx.font="10px ui-monospace,monospace";l.ratios.forEach((r,i)=>{const price=l.fib_prices[i],y=yAt(price);if(y==null)return;const gold=(r===0.5||r===0.618);octx.globalAlpha=gold?0.95:0.5;octx.strokeStyle=gold?"#f5c542":(l.color||"#1f6feb");octx.lineWidth=1;octx.beginPath();octx.moveTo(X,y);octx.lineTo(W,y);octx.stroke();octx.globalAlpha=1;octx.fillStyle=gold?"#f5c542":"#9aa6b8";octx.fillText(`${r}  ${price.toFixed(2)}`,X+3,y-2);});octx.restore();}
 function placePoint(t,price){
   if(tool==="measure"){if(!measureState||measureState.locked)measureState={p1:{t,price},p2:{t,price},locked:false};else{measureState.p2={t,price};measureState.locked=true;setTool("cursor");}drawOverlay();return;}
-  if(tool==="vwapanchor"){const ind={id:id(),type:"vwapa",params:{anchorT:Math.round(t)},color:PAL[inds.length%PAL.length],visible:true};inds.push(ind);build(ind);save();chips();setTool("cursor");return;}
+  if(tool==="vwapanchor"){const ind={id:id(),type:"vwapa",coin,params:{anchorT:Math.round(t)},color:PAL[inds.length%PAL.length],visible:true};inds.push(ind);build(ind);save();chips();setTool("cursor");return;}
   if(tool==="cursor"){if(measureState)clearMeasure();return;}
   if(tool==="level"){if(price!=null)addLevel(price);setTool("cursor");return;}
   if(!pending){pending={type:tool,p1:{t,price}};preview={t,price};drawOverlay();}
@@ -242,7 +243,7 @@ async function loadIndicators(){try{const s=await(await fetch("/api/indicators")
   else{save();}  /* nothing saved server-side yet -> migrate this device's set up */
 }catch(e){}}
 function id(){return "i"+Math.random().toString(36).slice(2,8);}
-function chips(){const c=document.getElementById("chips");c.innerHTML="";inds.forEach(ind=>{const t=ITYPES[ind.type],e=document.createElement("span");e.className="chip"+(ind.visible?"":" off");e.innerHTML=`<span class="sw" style="background:${ind.color}"></span>${t.lab(ind.params)}<span class="x">✕</span>`;e.querySelector(".x").onclick=ev=>{ev.stopPropagation();inds=inds.filter(x=>x.id!==ind.id);(sMap[ind.id]||[]).forEach(s=>{try{chart.removeSeries(s);}catch(e){}});save();chips();};e.onclick=()=>openPop(ind.id,e);c.appendChild(e);});}
+function chips(){const c=document.getElementById("chips");c.innerHTML="";inds.filter(ind=>!ind.coin||ind.coin===coin).forEach(ind=>{const t=ITYPES[ind.type],e=document.createElement("span");e.className="chip"+(ind.visible?"":" off");e.innerHTML=`<span class="sw" style="background:${ind.color}"></span>${t.lab(ind.params)}<span class="x">✕</span>`;e.querySelector(".x").onclick=ev=>{ev.stopPropagation();inds=inds.filter(x=>x.id!==ind.id);(sMap[ind.id]||[]).forEach(s=>{try{chart.removeSeries(s);}catch(e){}});save();chips();};e.onclick=()=>openPop(ind.id,e);c.appendChild(e);});}
 
 /* ---- indicator popover ---- */
 function fillTypes(){const s=document.getElementById("pType");s.innerHTML="";for(const k in ITYPES){const o=document.createElement("option");o.value=k;o.textContent=ITYPES[k].n;s.appendChild(o);}}
@@ -281,7 +282,7 @@ function renderAlerts(){
 }
 
 /* ---- wiring ---- */
-function setCoin(c){if(!c)return;coin=c;load_().then(()=>{redraw();connect();});}
+function setCoin(c){if(!c)return;coin=c;load_().then(()=>{chips();redraw();connect();});}
 async function loadMarkets(){const sym=document.getElementById("sym");let list=null;try{const r=await fetch("/api/markets");const j=await r.json();if(Array.isArray(j)&&j.length)list=j;}catch(e){}
   if(!list)list=Object.entries(COINS).map(([k,v])=>({coin:v,sym:k,vol:0}));
   sym.innerHTML=list.map(m=>`<option value="${m.coin}"${m.coin===coin?" selected":""}>${m.sym}</option>`).join("");}
