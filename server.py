@@ -415,6 +415,21 @@ def _vwap(candles, anchor):
     return val
 
 
+def _vwap_anchored(candles, anchor_s):
+    """VWAP accumulated from the bar at/after anchor_s (unix seconds).
+    Mirrors the chart's ⚓ anchored VWAP. candle["t"] is in ms."""
+    a_ms = anchor_s * 1000
+    pv = v = 0.0
+    val = None
+    for c in candles:
+        if c["t"] < a_ms:
+            continue
+        tp = (c["h"] + c["l"] + c["c"]) / 3
+        pv += tp * c["v"]; v += c["v"]
+        val = pv / v if v > 0 else c["c"]
+    return val
+
+
 def _pattern(candles, name):
     if len(candles) < 3:
         return False
@@ -473,6 +488,11 @@ def eval_condition(cond, ctx):
         return cmp(ctx["oi"], float(cond["value"]))
     if t == "vwap":
         return cmp(price, _vwap(ctx["candles"], cond.get("anchor", "week")))
+    if t == "avwap":
+        at = cond.get("anchorT")
+        if at in (None, ""):
+            return False
+        return cmp(price, _vwap_anchored(ctx["candles"], int(float(at))))
     if t == "ema":
         return cmp(price, _ema(ctx["closes"], int(cond.get("period", 45))))
     if t == "rsi":
@@ -492,6 +512,8 @@ def cond_text(c):
         return f"OI {op} {c.get('value')}"
     if t == "vwap":
         return f"price {op} VWAP({c.get('anchor', 'week')})"
+    if t == "avwap":
+        return f"price {op} anchored VWAP"
     if t == "ema":
         return f"price {op} EMA{c.get('period', 45)}"
     if t == "rsi":
