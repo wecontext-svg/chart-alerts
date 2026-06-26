@@ -221,8 +221,9 @@ def record_opt_snapshot(coin, res):
     if not coin or not res or res.get("error"):
         return
     h = OPTHIST.setdefault(coin, {})
-    h[dt.date.today().isoformat()] = {k: res.get(k) for k in
-                                      ("max_pain", "call_wall", "put_wall", "gamma_flip", "spot")}
+    day = dt.datetime.now(dt.timezone.utc).date().isoformat()
+    h[day] = {k: res.get(k) for k in
+              ("max_pain", "call_wall", "put_wall", "gamma_flip", "spot")}
     # keep the most recent ~180 days per coin
     if len(h) > 180:
         for d in sorted(h)[:-180]:
@@ -880,21 +881,25 @@ async def alert_loop(app):
 
 
 async def option_history_loop(app):
-    """Once per day, snapshot option levels for every coin you've used 📌 on,
-    so the daily trend keeps building even when you're not watching."""
+    """Snapshot option levels once per day at ~14:30 UTC (~10:30am ET), just
+    after the morning OI publishes — so each dated snapshot is that day's fresh
+    walls. Covers your 📌 coins plus the auto-watchlist."""
     session = app["session"]
+    SNAP_MIN = 14 * 60 + 30  # 14:30 UTC
     while True:
         try:
-            today = dt.date.today().isoformat()
-            for coin in sorted(set(OPTHIST.keys()) | set(OPT_WATCH)):
-                if OPTHIST.get(coin, {}).get(today):
-                    continue  # already have today's snapshot
-                res = await compute_option_levels(session, coin)
-                record_opt_snapshot(coin, res)
-                await asyncio.sleep(2)  # be gentle on the feed
+            now = dt.datetime.now(dt.timezone.utc)
+            if now.hour * 60 + now.minute >= SNAP_MIN:
+                today = now.date().isoformat()
+                for coin in sorted(set(OPTHIST.keys()) | set(OPT_WATCH)):
+                    if OPTHIST.get(coin, {}).get(today):
+                        continue  # already captured today
+                    res = await compute_option_levels(session, coin)
+                    record_opt_snapshot(coin, res)
+                    await asyncio.sleep(2)  # be gentle on the feed
         except Exception as e:
             print("option_history_loop error", e)
-        await asyncio.sleep(3600)  # re-check hourly; records at most once/day/coin
+        await asyncio.sleep(900)  # re-check every 15 min so it fires promptly
 
 
 # ---------- app wiring ----------
