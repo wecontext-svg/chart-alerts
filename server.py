@@ -58,6 +58,15 @@ PORT = int(os.environ.get("PORT", "8000"))
 HOST = os.environ.get("HOST", "0.0.0.0")  # 0.0.0.0 = reachable from your phone on the same Wi-Fi
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")  # if set, the UI requires this password
 
+# Symbols auto-tracked for daily option-level history (no button press needed).
+# Override with OPT_WATCH="NVDA,AMD,...". Only optionable US names record; the
+# rest just error out harmlessly. Pressing 📌 also enrolls any extra symbol.
+_DEFAULT_WATCH = ("NVDA AMD AAPL AMZN GOOGL MSFT META TSLA PLTR HOOD ORCL MU COIN "
+                  "MSTR NFLX AVGO MRVL INTC QCOM ARM TSM DELL IBM LLY GME RIVN RKLB "
+                  "BABA NBIS NOW COST DKNG HIMS WDC SNDK")
+OPT_WATCH = [s if ":" in s else f"xyz:{s}" for s in
+             os.environ.get("OPT_WATCH", _DEFAULT_WATCH).replace(",", " ").split()]
+
 levels_lock = asyncio.Lock()
 
 
@@ -877,7 +886,7 @@ async def option_history_loop(app):
     while True:
         try:
             today = dt.date.today().isoformat()
-            for coin in list(OPTHIST.keys()):
+            for coin in sorted(set(OPTHIST.keys()) | set(OPT_WATCH)):
                 if OPTHIST.get(coin, {}).get(today):
                     continue  # already have today's snapshot
                 res = await compute_option_levels(session, coin)
