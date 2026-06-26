@@ -184,6 +184,43 @@ def save_outbox():
     OUTBOX_FILE.write_text(json.dumps(PENDING))
 
 
+# OPTHIST records one option-level snapshot per coin per day so you can chart how
+# max pain / walls / gamma flip drift over time. Builds forward from first use
+# (historical OI isn't available for free). { coin: { "YYYY-MM-DD": {...} } }
+OPTHIST_FILE = STATE_DIR / "option_history.json"
+
+
+def load_opthist():
+    if OPTHIST_FILE.exists():
+        try:
+            d = json.loads(OPTHIST_FILE.read_text())
+            if isinstance(d, dict):
+                return d
+        except Exception:
+            pass
+    return {}
+
+
+OPTHIST = load_opthist()
+
+
+def save_opthist():
+    OPTHIST_FILE.write_text(json.dumps(OPTHIST))
+
+
+def record_opt_snapshot(coin, res):
+    if not coin or not res or res.get("error"):
+        return
+    h = OPTHIST.setdefault(coin, {})
+    h[dt.date.today().isoformat()] = {k: res.get(k) for k in
+                                      ("max_pain", "call_wall", "put_wall", "gamma_flip", "spot")}
+    # keep the most recent ~180 days per coin
+    if len(h) > 180:
+        for d in sorted(h)[:-180]:
+            h.pop(d, None)
+    save_opthist()
+
+
 # ---------- HTTP handlers ----------
 async def index(request):
     return web.FileResponse(BASE / "index.html")
@@ -329,21 +366,22 @@ def _bs_gamma(S, K, sigma, T):
     return math.exp(-0.5 * d1 * d1) / math.sqrt(2 * math.pi) / (S * sigma * math.sqrt(T))
 
 
-async def api_option_levels(request):
-    """Max pain + call/put walls for this week's expiry, from CBOE's free
-    delayed options feed. Maps the HL symbol (xyz:NVDA) -> underlying (NVDA)."""
-    sym = request.query.get("coin", "").split(":")[-1].upper()
+async def compute_option_levels(session, coin):
+    """Max pain + call/put walls for this week's expiry + net GEX / gamma flip,
+    from CBOE's free delayed feed. Maps HL symbol (xyz:NVDA) -> underlying (NVDA).
+    Returns a plain dict (with "error" on failure)."""
+    sym = coin.split(":")[-1].upper()
     if not sym:
-        return web.json_response({"error": "no symbol"}, status=400)
+        return {"error": "no symbol"}
     url = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
     try:
-        async with request.app["session"].get(
+        async with session.get(
                 url, headers={"User-Agent": "Mozilla/5.0"}, timeout=ClientTimeout(total=15)) as r:
             if r.status != 200:
-                return web.json_response({"error": f"No options data for {sym}."})
+                return {"error": f"No options data for {sym}."}
             j = await r.json()
     except Exception as e:
-        return web.json_response({"error": f"Options fetch failed: {e}"})
+        return {"error": f"Options fetch failed: {e}"}
 
     data = j.get("data") or {}
     spot = _f(data.get("current_price"))
@@ -370,12 +408,12 @@ async def api_option_levels(request):
 
     future = sorted(e for e in byexp if e >= today)
     if not future:
-        return web.json_response({"error": f"No upcoming expiry for {sym}."})
+        return {"error": f"No upcoming expiry for {sym}."}
     exp = future[0]
     calls, puts = byexp[exp]["C"], byexp[exp]["P"]
     strikes = sorted(set(calls) | set(puts))
     if not strikes:
-        return web.json_response({"error": f"Empty option chain for {sym}."})
+        return {"error": f"Empty option chain for {sym}."}
 
     def pain(S):
         tot = 0.0
@@ -408,7 +446,7 @@ async def api_option_levels(request):
                 break
             prev, prev_s = g, S
 
-    return web.json_response({
+    return {
         "underlying": sym,
         "expiry": exp.isoformat(),
         "spot": spot,
@@ -417,7 +455,21 @@ async def api_option_levels(request):
         "put_wall": max(puts, key=lambda k: puts[k]) if puts else None,
         "gamma_flip": gamma_flip,
         "net_gex": round(net_gex, 1) if net_gex is not None else None,
-    })
+    }
+
+
+async def api_option_levels(request):
+    """Live button: compute levels and record today's snapshot for history."""
+    coin = request.query.get("coin", "")
+    res = await compute_option_levels(request.app["session"], coin)
+    record_opt_snapshot(coin, res)
+    return web.json_response(res)
+
+
+async def api_option_history(request):
+    """Daily series of recorded option levels for charting the trend."""
+    h = OPTHIST.get(request.query.get("coin", ""), {})
+    return web.json_response([dict(date=d, **v) for d, v in sorted(h.items())])
 
 
 async def api_test(request):
@@ -818,14 +870,34 @@ async def alert_loop(app):
         await asyncio.sleep(POLL_SECONDS)
 
 
+async def option_history_loop(app):
+    """Once per day, snapshot option levels for every coin you've used 📌 on,
+    so the daily trend keeps building even when you're not watching."""
+    session = app["session"]
+    while True:
+        try:
+            today = dt.date.today().isoformat()
+            for coin in list(OPTHIST.keys()):
+                if OPTHIST.get(coin, {}).get(today):
+                    continue  # already have today's snapshot
+                res = await compute_option_levels(session, coin)
+                record_opt_snapshot(coin, res)
+                await asyncio.sleep(2)  # be gentle on the feed
+        except Exception as e:
+            print("option_history_loop error", e)
+        await asyncio.sleep(3600)  # re-check hourly; records at most once/day/coin
+
+
 # ---------- app wiring ----------
 async def on_startup(app):
     app["session"] = ClientSession(connector=TCPConnector(ssl=_ssl_context()))
     app["alert_task"] = asyncio.create_task(alert_loop(app))
+    app["opthist_task"] = asyncio.create_task(option_history_loop(app))
 
 
 async def on_cleanup(app):
     app["alert_task"].cancel()
+    app["opthist_task"].cancel()
     await app["session"].close()
 
 
@@ -847,6 +919,7 @@ def make_app():
         web.get("/api/indicators", api_indicators),
         web.put("/api/indicators", api_indicators),
         web.get("/api/optionlevels", api_option_levels),
+        web.get("/api/optionhistory", api_option_history),
     ])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)

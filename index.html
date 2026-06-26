@@ -101,6 +101,7 @@
   <button class="add" id="addBtn" title="add indicator (i)">+ƒ</button>
   <button class="add" id="clrM" title="clear measurement" style="display:none">✕📏</button>
   <button class="add" id="opBtn" title="max pain & call/put walls (this week)">📌</button>
+  <button class="add" id="opHistBtn" title="daily option-level history (trend)">📈</button>
   <button class="add" id="alBtn" title="alerts">🔔<span id="alN"></span></button>
 </div>
 <div id="chart"></div>
@@ -257,7 +258,7 @@ function fillTypes(){const s=document.getElementById("pType");s.innerHTML="";for
 function params(type,vals){const b=document.getElementById("pParams");b.innerHTML="";const ps=ITYPES[type].p;if(!ps.length){b.innerHTML='<div class="mut" style="margin-top:6px">no params</div>';return;}const row=document.createElement("div");row.className="pp";ps.forEach(p=>{const d=document.createElement("div");const cur=vals&&vals[p.k]!=null?vals[p.k]:p.d;if(p.sel){d.innerHTML=`<label>${p.l}</label><select data-p="${p.k}" data-str="1">${p.sel.map(o=>`<option ${o===cur?"selected":""}>${o}</option>`).join("")}</select>`;}else{d.innerHTML=`<label>${p.l}</label><input type="number" data-p="${p.k}" value="${cur}" step="${p.step||1}" min="1">`;}row.appendChild(d);});b.appendChild(row);}
 function openPop(eid,anchor){editId=eid;const ind=eid?inds.find(x=>x.id===eid):null;const pop=document.getElementById("indPop");document.getElementById("pType").value=ind?ind.type:"ema";params(ind?ind.type:"ema",ind?ind.params:null);document.getElementById("pColor").value=ind?ind.color:(defColors[ind?ind.type:"ema"]||PAL[inds.length%PAL.length]);document.getElementById("pGo").textContent=eid?"Update":"Add";const r=(anchor||document.getElementById("addBtn")).getBoundingClientRect();pop.style.left=Math.min(r.left,window.innerWidth-200)+"px";pop.style.top=(r.bottom+5)+"px";pop.classList.add("on");}
 function closePop(){document.getElementById("indPop").classList.remove("on");editId=null;}
-function goPop(){const type=document.getElementById("pType").value,params={};document.querySelectorAll("#pParams [data-p]").forEach(i=>params[i.dataset.p]=i.dataset.str?i.value:parseFloat(i.value));const color=document.getElementById("pColor").value;if(editId){const ind=inds.find(x=>x.id===editId);Object.assign(ind,{type,params,color});build(ind);}else{const ind={id:id(),type,params,color,visible:true};inds.push(ind);build(ind);}defColors[type]=color;saveDefColors();save();chips();closePop();}
+function goPop(){const type=document.getElementById("pType").value,params={};document.querySelectorAll("#pParams [data-p]").forEach(i=>params[i.dataset.p]=i.dataset.str?i.value:parseFloat(i.value));const color=document.getElementById("pColor").value;if(editId){const ind=inds.find(x=>x.id===editId);Object.assign(ind,{type,params:Object.assign({},ind.params,params),color});build(ind);}else{const ind={id:id(),type,params,color,visible:true};inds.push(ind);build(ind);}defColors[type]=color;saveDefColors();save();chips();closePop();}
 
 /* ---- levels ---- */
 async function loadLevels(){levels=await(await fetch("/api/levels")).json();redraw();}
@@ -310,8 +311,24 @@ async function drawOptionLevels(){
   }catch(e){toast("couldn't load option levels");}
 }
 
+/* daily history trend lines (max pain / walls / gamma flip over time) */
+let histSeries=[];
+function clearHist(){histSeries.forEach(s=>{try{chart.removeSeries(s);}catch(e){}});histSeries=[];}
+async function toggleHistory(){
+  if(histSeries.length){clearHist();toast("history hidden");return;}
+  toast("loading option history…");
+  try{
+    const h=await(await fetch(`/api/optionhistory?coin=${encodeURIComponent(coin)}`)).json();
+    if(!h.length){toast("no history yet — press 📌; a snapshot is saved daily");return;}
+    const tm=d=>{const[y,m,dd]=d.split("-").map(Number);return Date.UTC(y,m-1,dd)/1000;};
+    const mk=(key,color)=>{const data=h.filter(x=>x[key]!=null).map(x=>({time:tm(x.date),value:x[key]}));if(data.length){const s=chart.addLineSeries({color,lineWidth:2,priceScaleId:"right",lastValueVisible:false,priceLineVisible:false});s.setData(data);histSeries.push(s);}};
+    mk("put_wall","#26a69a");mk("gamma_flip","#3b82f6");mk("max_pain","#f5a623");mk("call_wall","#ef5350");
+    toast(`${h.length} day(s) of history · 🟢put 🔵flip 🟡maxpain 🔴call`);
+  }catch(e){toast("couldn't load history");}
+}
+
 /* ---- wiring ---- */
-function setCoin(c){if(!c)return;coin=c;load_().then(()=>{chips();redraw();connect();});}
+function setCoin(c){if(!c)return;clearHist();coin=c;load_().then(()=>{chips();redraw();connect();});}
 async function loadMarkets(){const sym=document.getElementById("sym");let list=null;try{const r=await fetch("/api/markets");const j=await r.json();if(Array.isArray(j)&&j.length)list=j;}catch(e){}
   if(!list)list=Object.entries(COINS).map(([k,v])=>({coin:v,sym:k,vol:0}));
   sym.innerHTML=list.map(m=>`<option value="${m.coin}"${m.coin===coin?" selected":""}>${m.sym}</option>`).join("");}
@@ -352,6 +369,7 @@ function init(){mkChart();fillTypes();chips();
   document.getElementById("alBtn").onclick=()=>document.getElementById("alerts").classList.toggle("on");
   document.getElementById("clrM").onclick=clearMeasure;
   document.getElementById("opBtn").onclick=drawOptionLevels;
+  document.getElementById("opHistBtn").onclick=toggleHistory;
   document.getElementById("muteBtn").onclick=toggleMute;
   document.getElementById("confBtn").onclick=openConf;
   document.getElementById("confAdd").onclick=()=>{if(document.querySelectorAll("#confRows .condrow").length<5)document.getElementById("confRows").appendChild(condRow());};
