@@ -14,7 +14,7 @@ Open: http://127.0.0.1:8000
 """
 import asyncio, json, os, ssl, time
 from pathlib import Path
-from aiohttp import web, ClientSession, TCPConnector
+from aiohttp import web, ClientSession, TCPConnector, ClientTimeout
 
 
 def _ssl_context():
@@ -156,6 +156,31 @@ def load_indicators():
 
 def save_indicators(inds):
     INDICATORS_FILE.write_text(json.dumps(inds, indent=2))
+
+
+# OUTBOX is a durable queue of alert messages waiting for Telegram confirmation.
+# Messages persist to disk, so a network blip, Telegram outage, or container
+# restart can never silently drop an alert — it's retried every poll until
+# Telegram replies ok:true.
+OUTBOX_FILE = STATE_DIR / "outbox.json"
+
+
+def load_outbox():
+    if OUTBOX_FILE.exists():
+        try:
+            data = json.loads(OUTBOX_FILE.read_text())
+            if isinstance(data, list):
+                return data
+        except Exception:
+            pass
+    return []
+
+
+PENDING = load_outbox()
+
+
+def save_outbox():
+    OUTBOX_FILE.write_text(json.dumps(PENDING))
 
 
 # ---------- HTTP handlers ----------
@@ -534,16 +559,22 @@ def format_confluence_alert(l, ctx):
 
 
 async def send_telegram(session, text):
+    """Return True only when Telegram confirms delivery (ok:true). Any network
+    error, timeout, or non-ok response returns False so the caller re-queues it."""
     if not (TG_TOKEN and TG_CHAT):
         print("[telegram disabled] " + text)
-        return
+        return True  # no creds -> undeliverable; don't grow the queue forever
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     try:
-        async with session.post(url, json={"chat_id": TG_CHAT, "text": text,
-                                           "parse_mode": "HTML"}) as r:
-            await r.read()
+        async with session.post(url, json={"chat_id": TG_CHAT, "text": text, "parse_mode": "HTML"},
+                                timeout=ClientTimeout(total=15)) as r:
+            data = await r.json()
+        if not data.get("ok"):
+            print("telegram not ok:", data.get("description"))
+        return bool(data.get("ok"))
     except Exception as e:
         print("telegram error", e)
+        return False
 
 
 def format_alert(l, px, prev, side, target=None, label=None):
@@ -665,8 +696,19 @@ async def alert_loop(app):
                 if changed:
                     async with levels_lock:
                         save_levels(LEVELS)
-                for msg in outbox:
-                    await send_telegram(session, msg)
+                if outbox:
+                    PENDING.extend(outbox)
+                    save_outbox()
+            # Always flush the durable queue (also retries anything left from a
+            # previous failed send / restart). Keep whatever Telegram didn't confirm.
+            if PENDING:
+                still = []
+                for msg in PENDING:
+                    if not await send_telegram(session, msg):
+                        still.append(msg)
+                if len(still) != len(PENDING):
+                    PENDING[:] = still
+                    save_outbox()
         except Exception as e:
             print("alert_loop error", e)
         await asyncio.sleep(POLL_SECONDS)
