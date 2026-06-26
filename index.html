@@ -321,7 +321,7 @@ async function toggleHistory(){
     const h=await(await fetch(`/api/optionhistory?coin=${encodeURIComponent(coin)}`)).json();
     if(!h.length){toast("no history yet — press 📌; a snapshot is saved daily");return;}
     const tm=d=>{const[y,m,dd]=d.split("-").map(Number);return Date.UTC(y,m-1,dd)/1000;};
-    const mk=(key,color)=>{const data=h.filter(x=>x[key]!=null).map(x=>({time:tm(x.date),value:x[key]}));if(data.length){const s=chart.addLineSeries({color,lineWidth:2,priceScaleId:"right",lastValueVisible:false,priceLineVisible:false});s.setData(data);histSeries.push(s);}};
+    const mk=(key,color)=>{const data=h.filter(x=>x[key]!=null).map(x=>({time:tm(x.date),value:x[key]}));if(data.length){const s=chart.addLineSeries({color,lineWidth:2,priceScaleId:"right",lastValueVisible:false,priceLineVisible:false,lineType:LC.LineType.WithSteps,autoscaleInfoProvider:()=>null});s.setData(data);histSeries.push(s);}};
     mk("put_wall","#26a69a");mk("gamma_flip","#3b82f6");mk("max_pain","#f5a623");mk("call_wall","#ef5350");
     toast(`${h.length} day(s) of history · 🟢put 🔵flip 🟡maxpain 🔴call`);
   }catch(e){toast("couldn't load history");}
