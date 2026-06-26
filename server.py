@@ -12,7 +12,8 @@ always-on host it alerts 24/7 whether or not the chart tab is open.
 Run:  TELEGRAM_BOT_TOKEN=... TELEGRAM_CHAT_ID=... python3 server.py
 Open: http://127.0.0.1:8000
 """
-import asyncio, json, os, ssl, time
+import asyncio, json, math, os, re, ssl, time
+import datetime as dt
 from pathlib import Path
 from aiohttp import web, ClientSession, TCPConnector, ClientTimeout
 
@@ -314,6 +315,109 @@ async def api_indicators(request):
         save_indicators(b)
         return web.json_response(b)
     return web.json_response(load_indicators())
+
+
+# OSI option symbol, e.g. NVDA240920C00120000 -> root, YYMMDD, C/P, strike*1000
+_OPT_RE = re.compile(r"^([A-Z]+)(\d{6})([CP])(\d{8})$")
+
+
+def _bs_gamma(S, K, sigma, T):
+    """Black-Scholes gamma (r=0). Same for calls and puts."""
+    if S <= 0 or K <= 0 or sigma <= 0 or T <= 0:
+        return 0.0
+    d1 = (math.log(S / K) + 0.5 * sigma * sigma * T) / (sigma * math.sqrt(T))
+    return math.exp(-0.5 * d1 * d1) / math.sqrt(2 * math.pi) / (S * sigma * math.sqrt(T))
+
+
+async def api_option_levels(request):
+    """Max pain + call/put walls for this week's expiry, from CBOE's free
+    delayed options feed. Maps the HL symbol (xyz:NVDA) -> underlying (NVDA)."""
+    sym = request.query.get("coin", "").split(":")[-1].upper()
+    if not sym:
+        return web.json_response({"error": "no symbol"}, status=400)
+    url = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
+    try:
+        async with request.app["session"].get(
+                url, headers={"User-Agent": "Mozilla/5.0"}, timeout=ClientTimeout(total=15)) as r:
+            if r.status != 200:
+                return web.json_response({"error": f"No options data for {sym}."})
+            j = await r.json()
+    except Exception as e:
+        return web.json_response({"error": f"Options fetch failed: {e}"})
+
+    data = j.get("data") or {}
+    spot = _f(data.get("current_price"))
+    today = dt.date.today()
+    byexp = {}  # exp_date -> {"C": {strike: oi}, "P": {strike: oi}}
+    gex_opts = []  # (strike, sign, oi, iv, T) across ALL expiries, for gamma flip / net GEX
+    for o in data.get("options") or []:
+        m = _OPT_RE.match(o.get("option", ""))
+        if not m:
+            continue
+        _root, ymd, cp, sraw = m.groups()
+        try:
+            exp = dt.date(2000 + int(ymd[:2]), int(ymd[2:4]), int(ymd[4:6]))
+        except Exception:
+            continue
+        strike = int(sraw) / 1000.0
+        oi = o.get("open_interest") or 0
+        d = byexp.setdefault(exp, {"C": {}, "P": {}})
+        d[cp][strike] = d[cp].get(strike, 0) + oi
+        iv = _f(o.get("iv")) or 0.0
+        T = max((exp - today).days, 0) / 365.0
+        if oi > 0 and iv > 0 and T > 0:
+            gex_opts.append((strike, 1 if cp == "C" else -1, oi, iv, T))
+
+    future = sorted(e for e in byexp if e >= today)
+    if not future:
+        return web.json_response({"error": f"No upcoming expiry for {sym}."})
+    exp = future[0]
+    calls, puts = byexp[exp]["C"], byexp[exp]["P"]
+    strikes = sorted(set(calls) | set(puts))
+    if not strikes:
+        return web.json_response({"error": f"Empty option chain for {sym}."})
+
+    def pain(S):
+        tot = 0.0
+        for K, oi in calls.items():
+            if K < S:
+                tot += oi * (S - K)
+        for K, oi in puts.items():
+            if K > S:
+                tot += oi * (K - S)
+        return tot
+
+    # net dealer gamma at a trial spot (calls +, puts -); sign convention where
+    # below the flip = short gamma (moves amplified), above = long gamma (dampened)
+    def net_gamma(S):
+        return sum(sign * oi * _bs_gamma(S, K, iv, T) for (K, sign, oi, iv, T) in gex_opts)
+
+    gamma_flip = None
+    net_gex = None
+    if gex_opts and spot:
+        # $ GEX at spot, in millions (per 1% move)
+        net_gex = sum(sign * _bs_gamma(spot, K, iv, T) * oi * 100 * spot * spot * 0.01
+                      for (K, sign, oi, iv, T) in gex_opts) / 1e6
+        lo, hi, steps = spot * 0.6, spot * 1.4, 240
+        prev = prev_s = None
+        for i in range(steps + 1):
+            S = lo + (hi - lo) * i / steps
+            g = net_gamma(S)
+            if prev is not None and ((prev <= 0 < g) or (prev >= 0 > g)):
+                gamma_flip = round(prev_s + (S - prev_s) * (0 - prev) / (g - prev), 2)
+                break
+            prev, prev_s = g, S
+
+    return web.json_response({
+        "underlying": sym,
+        "expiry": exp.isoformat(),
+        "spot": spot,
+        "max_pain": min(strikes, key=pain),
+        "call_wall": max(calls, key=lambda k: calls[k]) if calls else None,
+        "put_wall": max(puts, key=lambda k: puts[k]) if puts else None,
+        "gamma_flip": gamma_flip,
+        "net_gex": round(net_gex, 1) if net_gex is not None else None,
+    })
 
 
 async def api_test(request):
@@ -742,6 +846,7 @@ def make_app():
         web.post("/api/mute", api_mute),
         web.get("/api/indicators", api_indicators),
         web.put("/api/indicators", api_indicators),
+        web.get("/api/optionlevels", api_option_levels),
     ])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)

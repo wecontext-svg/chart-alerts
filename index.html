@@ -58,6 +58,8 @@
   .lv .r2 label.mut{flex:0 0 auto;white-space:nowrap;}
   .lv input[type=text]{flex:1;}
   .mut{color:#6b7689;font-size:11px;}
+  #toast{position:fixed;left:50%;bottom:54px;transform:translateX(-50%);background:#11151c;border:1px solid #2c3a52;color:#e6edf6;padding:8px 12px;border-radius:8px;font-size:12px;z-index:50;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw;text-align:center;}
+  #toast.on{opacity:1;}
   button,.chip,.tf b,.tools b,.add{touch-action:manipulation;}
   /* ---- mobile / touch ---- */
   @media (max-width:720px){
@@ -98,11 +100,13 @@
   <span id="chips"></span>
   <button class="add" id="addBtn" title="add indicator (i)">+ƒ</button>
   <button class="add" id="clrM" title="clear measurement" style="display:none">✕📏</button>
+  <button class="add" id="opBtn" title="max pain & call/put walls (this week)">📌</button>
   <button class="add" id="alBtn" title="alerts">🔔<span id="alN"></span></button>
 </div>
 <div id="chart"></div>
 <canvas id="ovl"></canvas>
 <div id="touch"></div>
+<div id="toast"></div>
 
 <div class="pop" id="indPop">
   <label>Indicator</label>
@@ -284,6 +288,28 @@ function renderAlerts(){
   box.querySelectorAll("[data-note]").forEach(i=>i.onchange=()=>patch(i.dataset.note,{note:i.value}));
 }
 
+/* ---- option levels (max pain / OI walls / gamma flip) ---- */
+/* These are created as real levels (note prefixed 📌) so they render on the
+   chart AND show in the alerts panel where you can toggle 🔔 on each. */
+let _toastT;function toast(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("on");clearTimeout(_toastT);_toastT=setTimeout(()=>t.classList.remove("on"),4500);}
+async function drawOptionLevels(){
+  const existing=levels.filter(l=>l.coin===coin&&(l.note||"").startsWith("📌"));
+  if(existing.length){for(const l of existing)await del(l.id);toast("option levels removed");return;}  // toggle off
+  toast("loading option levels…");
+  try{
+    const d=await(await fetch(`/api/optionlevels?coin=${encodeURIComponent(coin)}`)).json();
+    if(d.error){toast(d.error);return;}
+    const mk=async(price,note,color)=>{if(price==null)return;const l=await(await fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coin,price,direction:"cross",alert_enabled:false,note,color})})).json();levels.push(l);draw(l);};
+    await mk(d.put_wall,`📌 Put Wall ${d.expiry}`,"#26a69a");
+    await mk(d.gamma_flip,`📌 Gamma Flip ${d.expiry}`,"#3b82f6");
+    await mk(d.max_pain,`📌 Max Pain ${d.expiry}`,"#f5a623");
+    await mk(d.call_wall,`📌 Call Wall ${d.expiry}`,"#ef5350");
+    renderAlerts();
+    const g=d.net_gex!=null?` · GEX ${d.net_gex}M ${d.net_gex>=0?"🟢 long-γ":"🔴 short-γ"}`:"";
+    toast(`${d.underlying} ${d.expiry} · tap 🔔 in alerts to arm${g}`);
+  }catch(e){toast("couldn't load option levels");}
+}
+
 /* ---- wiring ---- */
 function setCoin(c){if(!c)return;coin=c;load_().then(()=>{chips();redraw();connect();});}
 async function loadMarkets(){const sym=document.getElementById("sym");let list=null;try{const r=await fetch("/api/markets");const j=await r.json();if(Array.isArray(j)&&j.length)list=j;}catch(e){}
@@ -325,6 +351,7 @@ function init(){mkChart();fillTypes();chips();
   document.getElementById("pGo").onclick=goPop;
   document.getElementById("alBtn").onclick=()=>document.getElementById("alerts").classList.toggle("on");
   document.getElementById("clrM").onclick=clearMeasure;
+  document.getElementById("opBtn").onclick=drawOptionLevels;
   document.getElementById("muteBtn").onclick=toggleMute;
   document.getElementById("confBtn").onclick=openConf;
   document.getElementById("confAdd").onclick=()=>{if(document.querySelectorAll("#confRows .condrow").length<5)document.getElementById("confRows").appendChild(condRow());};
