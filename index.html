@@ -243,14 +243,17 @@ async function loadIndicators(){try{const s=await(await fetch("/api/indicators")
   else{save();}  /* nothing saved server-side yet -> migrate this device's set up */
 }catch(e){}}
 function id(){return "i"+Math.random().toString(36).slice(2,8);}
+/* your preferred default line color per indicator type (remembered per device) */
+let defColors=(()=>{try{return JSON.parse(localStorage.getItem("hl_defcolors"))||{};}catch(e){return {};}})();
+function saveDefColors(){localStorage.setItem("hl_defcolors",JSON.stringify(defColors));}
 function chips(){const c=document.getElementById("chips");c.innerHTML="";inds.filter(ind=>!ind.coin||ind.coin===coin).forEach(ind=>{const t=ITYPES[ind.type],e=document.createElement("span");e.className="chip"+(ind.visible?"":" off");e.innerHTML=`<span class="sw" style="background:${ind.color}"></span>${t.lab(ind.params)}<span class="x">✕</span>`;e.querySelector(".x").onclick=ev=>{ev.stopPropagation();inds=inds.filter(x=>x.id!==ind.id);(sMap[ind.id]||[]).forEach(s=>{try{chart.removeSeries(s);}catch(e){}});save();chips();};e.onclick=()=>openPop(ind.id,e);c.appendChild(e);});}
 
 /* ---- indicator popover ---- */
 function fillTypes(){const s=document.getElementById("pType");s.innerHTML="";for(const k in ITYPES){const o=document.createElement("option");o.value=k;o.textContent=ITYPES[k].n;s.appendChild(o);}}
 function params(type,vals){const b=document.getElementById("pParams");b.innerHTML="";const ps=ITYPES[type].p;if(!ps.length){b.innerHTML='<div class="mut" style="margin-top:6px">no params</div>';return;}const row=document.createElement("div");row.className="pp";ps.forEach(p=>{const d=document.createElement("div");const cur=vals&&vals[p.k]!=null?vals[p.k]:p.d;if(p.sel){d.innerHTML=`<label>${p.l}</label><select data-p="${p.k}" data-str="1">${p.sel.map(o=>`<option ${o===cur?"selected":""}>${o}</option>`).join("")}</select>`;}else{d.innerHTML=`<label>${p.l}</label><input type="number" data-p="${p.k}" value="${cur}" step="${p.step||1}" min="1">`;}row.appendChild(d);});b.appendChild(row);}
-function openPop(eid,anchor){editId=eid;const ind=eid?inds.find(x=>x.id===eid):null;const pop=document.getElementById("indPop");document.getElementById("pType").value=ind?ind.type:"ema";params(ind?ind.type:"ema",ind?ind.params:null);document.getElementById("pColor").value=ind?ind.color:PAL[inds.length%PAL.length];document.getElementById("pGo").textContent=eid?"Update":"Add";const r=(anchor||document.getElementById("addBtn")).getBoundingClientRect();pop.style.left=Math.min(r.left,window.innerWidth-200)+"px";pop.style.top=(r.bottom+5)+"px";pop.classList.add("on");}
+function openPop(eid,anchor){editId=eid;const ind=eid?inds.find(x=>x.id===eid):null;const pop=document.getElementById("indPop");document.getElementById("pType").value=ind?ind.type:"ema";params(ind?ind.type:"ema",ind?ind.params:null);document.getElementById("pColor").value=ind?ind.color:(defColors[ind?ind.type:"ema"]||PAL[inds.length%PAL.length]);document.getElementById("pGo").textContent=eid?"Update":"Add";const r=(anchor||document.getElementById("addBtn")).getBoundingClientRect();pop.style.left=Math.min(r.left,window.innerWidth-200)+"px";pop.style.top=(r.bottom+5)+"px";pop.classList.add("on");}
 function closePop(){document.getElementById("indPop").classList.remove("on");editId=null;}
-function goPop(){const type=document.getElementById("pType").value,params={};document.querySelectorAll("#pParams [data-p]").forEach(i=>params[i.dataset.p]=i.dataset.str?i.value:parseFloat(i.value));const color=document.getElementById("pColor").value;if(editId){const ind=inds.find(x=>x.id===editId);Object.assign(ind,{type,params,color});build(ind);}else{const ind={id:id(),type,params,color,visible:true};inds.push(ind);build(ind);}save();chips();closePop();}
+function goPop(){const type=document.getElementById("pType").value,params={};document.querySelectorAll("#pParams [data-p]").forEach(i=>params[i.dataset.p]=i.dataset.str?i.value:parseFloat(i.value));const color=document.getElementById("pColor").value;if(editId){const ind=inds.find(x=>x.id===editId);Object.assign(ind,{type,params,color});build(ind);}else{const ind={id:id(),type,params,color,visible:true};inds.push(ind);build(ind);}defColors[type]=color;saveDefColors();save();chips();closePop();}
 
 /* ---- levels ---- */
 async function loadLevels(){levels=await(await fetch("/api/levels")).json();redraw();}
@@ -295,12 +298,12 @@ function renderMute(){const b=document.getElementById("muteBtn");if(b){b.textCon
 
 // ---------- confluence builder ----------
 const COND_TYPES={
- price:{label:"Price",fields:[{k:"op",sel:[{v:">",l:"crosses above ↑"},{v:"<",l:"crosses below ↓"}]},{k:"value",ph:"value"}]},
- vwap:{label:"vs VWAP",fields:[{k:"op",sel:[{v:">",l:"crosses above ↑"},{v:"<",l:"crosses below ↓"}]},{k:"anchor",sel:["session","week","month"]}]},
- avwap:{label:"vs Anchored VWAP",fields:[{k:"op",sel:[{v:">",l:"crosses above ↑"},{v:"<",l:"crosses below ↓"}]},{k:"anchorT",dyn:"avwap"}]},
- ema:{label:"vs EMA",fields:[{k:"op",sel:[{v:">",l:"crosses above ↑"},{v:"<",l:"crosses below ↓"}]},{k:"period",def:45}]},
- rsi:{label:"RSI",fields:[{k:"op",sel:[{v:">",l:"crosses above ↑"},{v:"<",l:"crosses below ↓"}]},{k:"value",ph:"e.g.35"},{k:"period",def:14}]},
- funding:{label:"Funding",fields:[{k:"op",sel:[{v:">",l:"crosses above ↑"},{v:"<",l:"crosses below ↓"}]},{k:"value",def:0}]},
+ price:{label:"Price",fields:[{k:"op",sel:[{v:">",l:"above ↑"},{v:"<",l:"below ↓"}]},{k:"value",ph:"value"}]},
+ vwap:{label:"vs VWAP",fields:[{k:"op",sel:[{v:">",l:"above ↑"},{v:"<",l:"below ↓"}]},{k:"anchor",sel:["session","week","month"]}]},
+ avwap:{label:"vs Anchored VWAP",fields:[{k:"op",sel:[{v:">",l:"above ↑"},{v:"<",l:"below ↓"}]},{k:"anchorT",dyn:"avwap"}]},
+ ema:{label:"vs EMA",fields:[{k:"op",sel:[{v:">",l:"above ↑"},{v:"<",l:"below ↓"}]},{k:"period",def:45}]},
+ rsi:{label:"RSI",fields:[{k:"op",sel:[{v:">",l:"above ↑"},{v:"<",l:"below ↓"}]},{k:"value",ph:"e.g.35"},{k:"period",def:14}]},
+ funding:{label:"Funding",fields:[{k:"op",sel:[{v:">",l:"above ↑"},{v:"<",l:"below ↓"}]},{k:"value",def:0}]},
  pattern:{label:"Candle",fields:[{k:"name",sel:["bull_engulf","bear_engulf","hammer","shooting_star","doji","three_white_soldiers","three_black_crows"]}]},
 };
 function avwapLabel(t){const d=new Date(t*1000);return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getUTCMonth()]} ${d.getUTCDate()}`;}
@@ -318,7 +321,7 @@ function init(){mkChart();fillTypes();chips();
   document.querySelectorAll("#tools b").forEach(b=>b.onclick=()=>setTool(b.dataset.t));
   const tEl=document.getElementById("touch");tEl.addEventListener("touchstart",onTStart,{passive:false});tEl.addEventListener("touchmove",onTMove,{passive:false});tEl.addEventListener("touchend",onTEnd,{passive:false});tEl.addEventListener("touchcancel",onTEnd,{passive:false});
   document.getElementById("addBtn").onclick=e=>{const p=document.getElementById("indPop");p.classList.contains("on")?closePop():openPop(null,e.target);};
-  document.getElementById("pType").onchange=e=>params(e.target.value,null);
+  document.getElementById("pType").onchange=e=>{params(e.target.value,null);if(!editId&&defColors[e.target.value])document.getElementById("pColor").value=defColors[e.target.value];};
   document.getElementById("pGo").onclick=goPop;
   document.getElementById("alBtn").onclick=()=>document.getElementById("alerts").classList.toggle("on");
   document.getElementById("clrM").onclick=clearMeasure;
