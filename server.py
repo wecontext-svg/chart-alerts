@@ -665,32 +665,46 @@ def ctx_from(l, cx, candle_map):
 
 
 def eval_condition(cond, ctx):
-    t = cond.get("type")
-    op = cond.get("op", ">")
-    price = ctx["price"]
-    cmp = lambda a, b: (a is not None) and (a > b if op == ">" else a < b)
-    if price is None:
-        return False
-    if t == "price":
-        return cmp(price, float(cond["value"]))
-    if t == "funding":
-        return cmp(ctx["funding"], float(cond["value"]))
-    if t == "oi":
-        return cmp(ctx["oi"], float(cond["value"]))
-    if t == "vwap":
-        return cmp(price, _vwap(ctx["candles"], cond.get("anchor", "week")))
-    if t == "avwap":
-        at = cond.get("anchorT")
-        if at in (None, ""):
+    # Must NEVER raise — an exception here aborts the whole alert loop and
+    # silently blocks every alert. Missing data => condition simply not met.
+    try:
+        t = cond.get("type")
+        op = cond.get("op", ">")
+        price = ctx["price"]
+
+        def cmp(a, b):  # null-safe: missing value => not met (no None comparison)
+            if a is None or b is None:
+                return False
+            return a > b if op == ">" else a < b
+
+        def val():
+            return float(cond.get("value"))
+
+        if price is None:
             return False
-        return cmp(price, _vwap_anchored(ctx["candles"], int(float(at))))
-    if t == "ema":
-        return cmp(price, _ema(ctx["closes"], int(cond.get("period", 45))))
-    if t == "rsi":
-        return cmp(_rsi(ctx["closes"], int(cond.get("period", 14))), float(cond["value"]))
-    if t == "pattern":
-        return _pattern(ctx["candles"], cond.get("name", ""))
-    return False
+        if t == "price":
+            return cmp(price, val())
+        if t == "funding":
+            return cmp(ctx["funding"], val())
+        if t == "oi":
+            return cmp(ctx["oi"], val())
+        if t == "vwap":
+            return cmp(price, _vwap(ctx["candles"], cond.get("anchor", "week")))
+        if t == "avwap":
+            at = cond.get("anchorT")
+            if at in (None, ""):
+                return False
+            return cmp(price, _vwap_anchored(ctx["candles"], int(float(at))))
+        if t == "ema":
+            return cmp(price, _ema(ctx["closes"], int(cond.get("period", 45))))
+        if t == "rsi":
+            return cmp(_rsi(ctx["closes"], int(cond.get("period", 14))), val())
+        if t == "pattern":
+            return _pattern(ctx["candles"], cond.get("name", ""))
+        return False
+    except Exception as e:
+        print("eval_condition error", cond, e)
+        return False
 
 
 def cond_text(c):
