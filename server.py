@@ -568,6 +568,17 @@ def _ema(vals, p):
     return e
 
 
+def _ema_series(vals, p):
+    """Full EMA series (None during warmup) — mirrors the front-end ema()."""
+    k = 2 / (p + 1)
+    e = None
+    out = []
+    for i, x in enumerate(vals):
+        e = x if e is None else x * k + e * (1 - k)
+        out.append(None if i < p - 1 else e)
+    return out
+
+
 def _rsi(vals, p=14):
     if len(vals) < p + 1:
         return None
@@ -701,6 +712,56 @@ def eval_condition(cond, ctx):
             return cmp(_rsi(ctx["closes"], int(cond.get("period", 14))), val())
         if t == "pattern":
             return _pattern(ctx["candles"], cond.get("name", ""))
+        if t == "notrend":
+            # fires when the last `bars` closed candles are ALL in the neutral
+            # zone — neither >thresh% above EMA (uptrend) nor >thresh% below.
+            closes = ctx["closes"]
+            n = len(closes)
+            bars = int(cond.get("bars", 5))
+            ema_len = int(cond.get("emaLen", 50))
+            lookback = int(cond.get("lookback", 50))
+            th = float(cond.get("thresh", 70)) / 100
+            # need full lookback windows past EMA warmup, else counts are diluted
+            if n < ema_len + lookback + bars:
+                return False
+            ev = _ema_series(closes, ema_len)
+            for i in range(n - bars, n):
+                a = b = 0
+                for j in range(lookback):
+                    e2 = ev[i - j]
+                    if e2 is None:
+                        continue
+                    if closes[i - j] > e2:
+                        a += 1
+                    elif closes[i - j] < e2:
+                        b += 1
+                if (a / lookback > th) or (b / lookback > th):
+                    return False  # this bar is trending -> not "no-trend for N"
+            return True
+        if t == "trend":
+            # true while the latest closed bar is in an up/down trend; edge-fires
+            # exactly when the trend turns on. dir = up | down | any.
+            closes = ctx["closes"]
+            n = len(closes)
+            ema_len = int(cond.get("emaLen", 50))
+            lookback = int(cond.get("lookback", 50))
+            th = float(cond.get("thresh", 70)) / 100
+            if n < ema_len + lookback + 1:
+                return False
+            ev = _ema_series(closes, ema_len)
+            i = n - 1
+            a = b = 0
+            for j in range(lookback):
+                e2 = ev[i - j]
+                if e2 is None:
+                    continue
+                if closes[i - j] > e2:
+                    a += 1
+                elif closes[i - j] < e2:
+                    b += 1
+            up, dn = a / lookback > th, b / lookback > th
+            d = cond.get("dir", "any")
+            return up if d == "up" else dn if d == "down" else (up or dn)
         return False
     except Exception as e:
         print("eval_condition error", cond, e)
@@ -725,6 +786,10 @@ def cond_text(c):
         return f"RSI {op} {c.get('value')}"
     if t == "pattern":
         return f"candle = {c.get('name')}"
+    if t == "notrend":
+        return f"no-trend {c.get('bars', 5)} bars (vs EMA{c.get('emaLen', 50)})"
+    if t == "trend":
+        return f"{c.get('dir', 'any')} trend starts (EMA{c.get('emaLen', 50)})"
     return str(t)
 
 
