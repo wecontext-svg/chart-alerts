@@ -798,6 +798,9 @@ async def alert_loop(app):
     session = app["session"]
     print(f"alert daemon running (poll {POLL_SECONDS}s, "
           f"telegram {'ON' if TG_TOKEN and TG_CHAT else 'OFF'})")
+    # heartbeat so you KNOW the moment a new deploy is live + how many alerts are armed
+    armed = sum(1 for l in LEVELS if l.get("alert_enabled"))
+    await send_telegram(session, f"✅ <b>HL Chart</b> daemon online — {armed} alert(s) armed.")
     while True:
         try:
             async with levels_lock:
@@ -826,8 +829,15 @@ async def alert_loop(app):
                         met = bool(conds) and all(eval_condition(c, ctx) for c in conds)
                         prev = l.get("last_met")
                         if prev is None:
+                            # first evaluation after create/edit: arm, and if the
+                            # condition is ALREADY true, fire once now so a fresh
+                            # alert confirms itself instead of sitting silent.
                             l["last_met"] = met
                             changed = True
+                            if met and not muted():
+                                outbox.append(format_confluence_alert(l, ctx))
+                                if l.get("repeat", "always") == "once":
+                                    l["alert_enabled"] = False
                             continue
                         if met != prev:
                             l["last_met"] = met
