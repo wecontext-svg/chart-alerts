@@ -632,6 +632,81 @@ def _vwap_anchored(candles, anchor_s):
     return val
 
 
+def _yz_sigma(candles, n):
+    """Yang-Zhang realized volatility over the last n bars (candles: o/h/l/c)."""
+    m = len(candles)
+    if m < n + 1:
+        n = m - 1
+    if n < 2:
+        return 1e-10
+    OR = []; CO = []; RS = []
+    for i in range(m - n, m):
+        o, h, l, c = candles[i]["o"], candles[i]["h"], candles[i]["l"], candles[i]["c"]
+        pc = candles[i - 1]["c"]
+        if min(o, h, l, c, pc) <= 0:
+            continue
+        OR.append(math.log(o / pc)); CO.append(math.log(c / o))
+        RS.append(math.log(h / o) * math.log(h / c) + math.log(l / o) * math.log(l / c))
+    if len(OR) < 2:
+        return 1e-10
+    mean = lambda a: sum(a) / len(a)
+    var = lambda a: (lambda mu: sum((x - mu) ** 2 for x in a) / len(a))(mean(a))
+    k = 0.34 / (1.34 + (n + 1) / max(n - 1, 1))
+    sq = var(OR) + k * var(CO) + (1 - k) * mean(RS)
+    return max(math.sqrt(max(sq, 0.0)), 1e-10)
+
+
+def _ics_channel(candles, period, groups, sig_len, thresh):
+    """Reconstructed ST-EP06 core: σ-normalized block-trend channel. Returns
+    {dir, angle, upper, lower} at the last bar (fit excludes the last bar so a
+    fresh breakout can be detected), or None if not enough data."""
+    N = period * groups
+    m = len(candles)
+    if m < N + sig_len + 2:
+        return None
+    last = m - 1
+    gm = []; cx = []
+    for i in range(groups):
+        end = last - i * period; start = end - period + 1
+        if start < 0:
+            break
+        seg = candles[start:end + 1]
+        hi = max(c["h"] for c in seg); lo = min(c["l"] for c in seg)
+        if hi <= 0 or lo <= 0:
+            continue
+        gm.append(math.exp((math.log(hi) + math.log(lo)) / 2)); cx.append(end - period // 2)
+    gm.reverse(); cx.reverse()
+    if len(gm) < 2:
+        return None
+    bs = be = cs = ce = 0; cdir = 0
+    for i in range(1, len(gm)):
+        d = (gm[i] > gm[i - 1]) - (gm[i] < gm[i - 1])
+        if d != 0 and d == cdir:
+            ce = i
+        else:
+            cs = i - 1; ce = i; cdir = d
+        if ce - cs > be - bs:
+            bs, be = cs, ce
+    sig = _yz_sigma(candles, sig_len)
+    slope = ((math.log(gm[be]) - math.log(gm[bs])) / (cx[be] - cx[bs])
+             if cx[be] != cx[bs] and gm[bs] > 0 and gm[be] > 0 else 0.0)
+    angle = math.atan(slope / sig) * 180 / math.pi
+    direction = 1 if angle > thresh else -1 if angle < -thresh else 0
+    first = last - N + 1
+    up = -1e18; lo = 1e18
+    for j in range(first, last):  # exclude last bar -> lets a new bar break out
+        r = j - first
+        rh = math.log(candles[j]["h"]) - slope * r
+        rl = math.log(candles[j]["l"]) - slope * r
+        if rh > up:
+            up = rh
+        if rl < lo:
+            lo = rl
+    rl2 = last - first
+    return {"dir": direction, "angle": angle,
+            "upper": math.exp(slope * rl2 + up), "lower": math.exp(slope * rl2 + lo)}
+
+
 def _pattern(candles, name):
     if len(candles) < 3:
         return False
@@ -762,6 +837,16 @@ def eval_condition(cond, ctx):
             up, dn = a / lookback > th, b / lookback > th
             d = cond.get("dir", "any")
             return up if d == "up" else dn if d == "down" else (up or dn)
+        if t == "ics":
+            ch = _ics_channel(ctx["candles"], int(cond.get("period", 13)),
+                              int(cond.get("groups", 5)), int(cond.get("sig", 20)),
+                              float(cond.get("thresh", 0.5)))
+            if not ch:
+                return False
+            up_break = price > ch["upper"]
+            dn_break = price < ch["lower"]
+            d = cond.get("dir", "any")
+            return up_break if d == "up" else dn_break if d == "down" else (up_break or dn_break)
         return False
     except Exception as e:
         print("eval_condition error", cond, e)
@@ -790,6 +875,8 @@ def cond_text(c):
         return f"no-trend {c.get('bars', 5)} bars (vs EMA{c.get('emaLen', 50)})"
     if t == "trend":
         return f"{c.get('dir', 'any')} trend starts (EMA{c.get('emaLen', 50)})"
+    if t == "ics":
+        return f"ICS channel breakout ({c.get('dir', 'any')})"
     return str(t)
 
 
