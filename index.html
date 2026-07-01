@@ -39,6 +39,7 @@
   .pop .go{margin-top:9px;width:100%;background:#1f6feb;border:0;color:#fff;border-radius:6px;padding:6px;cursor:pointer;font:inherit;}
   /* alerts panel */
   #alerts{width:230px;right:8px;top:40px;}
+  #obPop{width:210px;right:8px;top:40px;}
   #confPop{width:320px;right:8px;top:40px;max-height:80vh;overflow:auto;}
   #confPop .condrow{display:flex;gap:4px;align-items:center;margin-bottom:5px;}
   #confPop .condrow select,#confPop .condrow input{padding:4px;font-size:12px;}
@@ -102,6 +103,7 @@
   <button class="add" id="clrM" title="clear measurement" style="display:none">✕📏</button>
   <button class="add" id="opBtn" title="max pain & call/put walls (this week)">📌</button>
   <button class="add" id="opHistBtn" title="daily option-level history (trend)">📈</button>
+  <button class="add" id="obBtn" title="order-book walls — heaviest combined buy/sell zones">📊</button>
   <button class="add" id="alBtn" title="alerts">🔔<span id="alN"></span></button>
 </div>
 <div id="chart"></div>
@@ -136,6 +138,14 @@
   <label>Note</label><input type="text" id="confNote" placeholder="optional">
   <div id="confErr" class="mut" style="color:#ef5350;margin-top:4px"></div>
   <button class="go" id="confSave" style="margin-top:8px">Create alert</button>
+</div>
+
+<div class="pop" id="obPop">
+  <div class="pp"><div><label>Zone width</label><select id="obAgg"><option value="4">Tight</option><option value="3" selected>Medium</option><option value="2">Wide</option></select></div>
+  <div><label>Min wall $</label><input type="number" id="obMin" value="1000000" step="500000" min="0"></div></div>
+  <div class="mut" style="margin-top:6px;font-size:10px">combined orders per price zone · 🟢 buy = longs · 🔴 sell = shorts</div>
+  <button class="go" id="obGo">Show walls</button>
+  <button class="add" id="obAlertGo" style="width:100%;margin-top:6px">🔔 Show + alert biggest walls</button>
 </div>
 
 <script>
@@ -360,6 +370,43 @@ async function toggleHistory(){
   }catch(e){toast("couldn't load history");}
 }
 
+/* ---- order-book walls (heaviest resting bids/asks) ---- */
+/* Same idea as option levels: drawn as real levels (note prefixed 📊) so they
+   render on the chart AND show in alerts where you can arm 🔔. Buy walls =
+   bids (where buyers/longs sit); sell walls = asks (where sellers/shorts sit). */
+function toggleOrderbookWalls(){
+  const existing=levels.filter(l=>l.coin===coin&&(l.note||"").startsWith("📊"));
+  if(existing.length){drawOrderbookWalls();return;}          // walls up -> toggle off
+  document.getElementById("obPop").classList.toggle("on");   // else pick $ range, then Show
+}
+async function drawOrderbookWalls(minN,agg,arm){
+  const existing=levels.filter(l=>l.coin===coin&&(l.note||"").startsWith("📊"));
+  // "Show walls" toggles off if already up; the alert preset always redraws fresh.
+  if(existing.length){for(const l of existing)await del(l.id);if(!arm){toast("order-book walls removed");return;}}
+  toast(arm?"arming biggest walls…":"loading order-book walls…");
+  try{
+    const d=await(await fetch(`/api/orderbookwalls?coin=${encodeURIComponent(coin)}&min=${minN}&agg=${agg}`)).json();
+    if(d.error){toast(d.error);return;}
+    const money=n=>n>=1e6?"$"+(n/1e6).toFixed(1)+"M":"$"+(n/1e3).toFixed(0)+"k";
+    const mid=d.mid||0;
+    // armIt -> create the level pre-armed; direction points the way price must
+    // travel to reach the wall (up into a sell wall above, down into a buy wall below).
+    const mk=async(price,note,color,armIt)=>{if(price==null)return;const dir=armIt?(price>=mid?"up":"down"):"cross";const l=await(await fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coin,price,direction:dir,alert_enabled:!!armIt,note,color})})).json();levels.push(l);draw(l);};
+    const bigBid=(d.bids||[])[0],bigAsk=(d.asks||[])[0];  // API returns each side sorted biggest-first
+    for(const b of (d.bids||[]))await mk(b.px,`📊 Buy wall ${money(b.notional)} · ${b.orders} ord`,"#26a69a",arm&&b===bigBid);
+    for(const a of (d.asks||[]))await mk(a.px,`📊 Sell wall ${money(a.notional)} · ${a.orders} ord`,"#ef5350",arm&&a===bigAsk);
+    renderAlerts();
+    const nb=(d.bids||[]).length,na=(d.asks||[]).length;
+    if(!nb&&!na){toast("no walls that big — lower Min wall $ or widen the zone");return;}
+    if(arm){
+      const p=[];if(bigBid)p.push(`buy ${money(bigBid.notional)} @ ${bigBid.px}`);if(bigAsk)p.push(`sell ${money(bigAsk.notional)} @ ${bigAsk.px}`);
+      toast(`🔔 armed biggest ${p.join(" · ")} — Telegram fires when price reaches it`);
+    }else{
+      toast(`${nb} buy · ${na} sell walls · tap 🔔 in alerts to arm`);
+    }
+  }catch(e){toast("couldn't load order-book walls");}
+}
+
 /* ---- wiring ---- */
 function setCoin(c){if(!c)return;clearHist();coin=c;load_().then(()=>{chips();redraw();connect();});}
 async function loadMarkets(){const sym=document.getElementById("sym");let list=null;try{const r=await fetch("/api/markets");const j=await r.json();if(Array.isArray(j)&&j.length)list=j;}catch(e){}
@@ -406,6 +453,10 @@ function init(){mkChart();fillTypes();chips();
   document.getElementById("clrM").onclick=clearMeasure;
   document.getElementById("opBtn").onclick=drawOptionLevels;
   document.getElementById("opHistBtn").onclick=toggleHistory;
+  document.getElementById("obBtn").onclick=toggleOrderbookWalls;
+  const obParams=()=>({mn:Math.max(0,+document.getElementById("obMin").value||1000000),agg:+document.getElementById("obAgg").value||3});
+  document.getElementById("obGo").onclick=()=>{const{mn,agg}=obParams();document.getElementById("obPop").classList.remove("on");drawOrderbookWalls(mn,agg,false);};
+  document.getElementById("obAlertGo").onclick=()=>{const{mn,agg}=obParams();document.getElementById("obPop").classList.remove("on");drawOrderbookWalls(mn,agg,true);};
   document.getElementById("muteBtn").onclick=toggleMute;
   document.getElementById("confBtn").onclick=openConf;
   document.getElementById("confAdd").onclick=()=>{if(document.querySelectorAll("#confRows .condrow").length<5)document.getElementById("confRows").appendChild(condRow());};

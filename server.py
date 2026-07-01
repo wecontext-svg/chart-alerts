@@ -482,6 +482,65 @@ async def api_option_history(request):
     return web.json_response([dict(date=d, **v) for d, v in sorted(h.items())])
 
 
+async def compute_orderbook_walls(session, coin, min_notional=1_000_000.0,
+                                  n_sig=3, per_side=6):
+    """Heaviest COMBINED resting-order zones in the live L2 book. Hyperliquid
+    aggregates the book to `n_sig` significant figures, so each 'wall' sums many
+    traders' orders sitting in one price band — the `orders` field is how many
+    orders are combined (e.g. a 1200 sell wall = $12M across 571 orders), not a
+    single person. Bids below price = buy walls (buyers/longs); asks above = sell
+    walls (sellers/shorts). Only zones with combined USD notional >= min_notional.
+    n_sig: 4 = tight (~±2%), 3 = medium (~±15%), 2 = wide (whole book)."""
+    if not coin:
+        return {"error": "no coin"}
+    body = {"type": "l2Book", "coin": coin, "nSigFigs": n_sig}
+    try:
+        async with session.post(HL_INFO, json=body) as r:
+            j = await r.json()
+    except Exception as e:
+        return {"error": f"Order book fetch failed: {e}"}
+    levels = (j or {}).get("levels") or []
+    if len(levels) < 2:
+        return {"error": f"No order book for {coin}."}
+    bids_raw, asks_raw = levels[0] or [], levels[1] or []
+
+    def clean(side):
+        out = []
+        for lvl in side:
+            px, sz = _f(lvl.get("px")), _f(lvl.get("sz"))
+            if px is None or sz is None or px <= 0 or sz <= 0:
+                continue
+            notl = px * sz
+            if notl >= min_notional:
+                out.append({"px": px, "sz": sz, "notional": round(notl, 2),
+                            "orders": int(lvl.get("n", 0) or 0)})
+        out.sort(key=lambda x: -x["notional"])
+        return out[:per_side]
+
+    best_bid = _f(bids_raw[0].get("px")) if bids_raw else None
+    best_ask = _f(asks_raw[0].get("px")) if asks_raw else None
+    mid = ((best_bid + best_ask) / 2) if (best_bid and best_ask) else (best_bid or best_ask)
+    return {"coin": coin, "sym": coin.split(":")[-1], "mid": mid, "nSigFigs": n_sig,
+            "bids": clean(bids_raw), "asks": clean(asks_raw)}
+
+
+async def api_orderbook_walls(request):
+    """Live button: heaviest COMBINED order-book wall zones for a coin.
+    Query: coin, min (min combined $, default 1M), agg (nSigFigs 2-5, default 3)."""
+    coin = request.query.get("coin", "")
+    try:
+        min_n = max(0.0, float(request.query.get("min", 1_000_000.0)))
+    except Exception:
+        min_n = 1_000_000.0
+    try:
+        n_sig = int(float(request.query.get("agg", 3)))
+    except Exception:
+        n_sig = 3
+    n_sig = max(2, min(5, n_sig))
+    res = await compute_orderbook_walls(request.app["session"], coin, min_n, n_sig)
+    return web.json_response(res)
+
+
 async def api_test(request):
     """Send a one-off Telegram message so you can confirm delivery + creds."""
     if not (TG_TOKEN and TG_CHAT):
@@ -1110,6 +1169,7 @@ def make_app():
         web.put("/api/indicators", api_indicators),
         web.get("/api/optionlevels", api_option_levels),
         web.get("/api/optionhistory", api_option_history),
+        web.get("/api/orderbookwalls", api_orderbook_walls),
     ])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
