@@ -9,6 +9,10 @@
   *{box-sizing:border-box;margin:0;}
   body{background:#0a0c10;color:#e6edf6;font:13px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;}
   #bar{display:flex;align-items:center;gap:4px;height:34px;padding:0 8px;background:#0d1015;border-bottom:1px solid #1b2230;}
+  #barScroll{display:flex;align-items:center;gap:4px;flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;}
+  #barScroll::-webkit-scrollbar{display:none;}
+  #barScroll>*{flex:0 0 auto;}
+  #barActions{display:flex;align-items:center;gap:4px;flex:0 0 auto;}
   #sym{background:#11151c;border:1px solid #1b2230;color:#e6edf6;border-radius:5px;padding:4px 7px;width:96px;font:inherit;text-transform:uppercase;}
   .tf b{padding:4px 8px;color:#6b7689;cursor:pointer;border-radius:5px;}
   .tf b.on{background:#1f6feb;color:#fff;}
@@ -65,10 +69,8 @@
   /* ---- mobile / touch ---- */
   @media (max-width:720px){
     body{font-size:14px;}
-    #bar{height:48px;gap:6px;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;scrollbar-width:none;}
-    #bar::-webkit-scrollbar{display:none;}
-    #bar>*{flex:0 0 auto;}
-    .sp{flex:1 1 0;min-width:0;}
+    #bar{height:48px;gap:6px;}
+    #barScroll{gap:6px;-webkit-overflow-scrolling:touch;}
     .ohlc{display:none;}
     #sym{width:78px;padding:9px 8px;font-size:14px;}
     .tf b,.tools b{padding:9px 11px;font-size:16px;}
@@ -92,19 +94,22 @@
 </head>
 <body>
 <div id="bar">
-  <select id="sym"></select>
-  <span class="tf" id="tf"><b data-i="5m">5m</b><b data-i="1h">1h</b><b data-i="4h" class="on">4h</b><b data-i="1d">D</b></span>
-  <span class="tools" id="tools" title="drawing tools"><b data-t="cursor" class="on" title="cursor — navigate (c)">▱</b><b data-t="level" title="horizontal level (h)">─</b><b data-t="trend" title="trend line (t)">╱</b><b data-t="ray" title="ray (r)">→</b><b data-t="extended" title="extended line (e)">⟷</b><b data-t="measure" title="measure (m)">📏</b><b data-t="fib" title="fib retracement (f)">𝑓</b><b data-t="vwapanchor" title="anchored VWAP — click a bar (a)">⚓</b></span>
-  <span class="dot" id="dot"></span>
-  <span class="ohlc" id="ohlc"></span>
-  <span class="sp"></span>
-  <span id="chips"></span>
-  <button class="add" id="addBtn" title="add indicator (i)">+ƒ</button>
-  <button class="add" id="clrM" title="clear measurement" style="display:none">✕📏</button>
-  <button class="add" id="opBtn" title="max pain & call/put walls (this week)">📌</button>
-  <button class="add" id="opHistBtn" title="daily option-level history (trend)">📈</button>
-  <button class="add" id="obBtn" title="order-book walls — heaviest combined buy/sell zones">📊</button>
-  <button class="add" id="alBtn" title="alerts">🔔<span id="alN"></span></button>
+  <div id="barScroll">
+    <select id="sym"></select>
+    <span class="tf" id="tf"><b data-i="5m">5m</b><b data-i="1h">1h</b><b data-i="4h" class="on">4h</b><b data-i="1d">D</b></span>
+    <span class="tools" id="tools" title="drawing tools"><b data-t="cursor" class="on" title="cursor — navigate (c)">▱</b><b data-t="level" title="horizontal level (h)">─</b><b data-t="trend" title="trend line (t)">╱</b><b data-t="ray" title="ray (r)">→</b><b data-t="extended" title="extended line (e)">⟷</b><b data-t="measure" title="measure (m)">📏</b><b data-t="fib" title="fib retracement (f)">𝑓</b><b data-t="vwapanchor" title="anchored VWAP — click a bar (a)">⚓</b></span>
+    <span class="dot" id="dot"></span>
+    <span class="ohlc" id="ohlc"></span>
+    <span id="chips"></span>
+  </div>
+  <div id="barActions">
+    <button class="add" id="addBtn" title="add indicator (i)">+ƒ</button>
+    <button class="add" id="clrM" title="clear measurement" style="display:none">✕📏</button>
+    <button class="add" id="opBtn" title="max pain & call/put walls (this week)">📌</button>
+    <button class="add" id="opHistBtn" title="daily option-level history (trend)">📈</button>
+    <button class="add" id="obBtn" title="order-book walls — heaviest combined buy/sell zones">📊</button>
+    <button class="add" id="alBtn" title="alerts">🔔<span id="alN"></span></button>
+  </div>
 </div>
 <div id="chart"></div>
 <canvas id="ovl"></canvas>
