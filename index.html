@@ -43,6 +43,7 @@
   .pop .go{margin-top:9px;width:100%;background:#1f6feb;border:0;color:#fff;border-radius:6px;padding:6px;cursor:pointer;font:inherit;}
   /* alerts panel */
   #alerts{width:230px;right:8px;top:40px;}
+  #alList{max-height:calc(100vh - 240px);overflow-y:auto;}
   #obPop{width:210px;right:8px;top:40px;}
   #confPop{width:320px;right:8px;top:40px;max-height:80vh;overflow:auto;}
   #confPop .condrow{display:flex;gap:4px;align-items:center;margin-bottom:5px;}
@@ -83,6 +84,7 @@
     .pop{left:0!important;right:0!important;top:auto!important;bottom:0!important;width:auto!important;
          border-radius:14px 14px 0 0;max-height:64vh;overflow:auto;padding:16px 16px calc(16px + env(safe-area-inset-bottom));}
     #alerts{width:auto;}
+    #alList{max-height:none;}
     .pop select,.pop input{padding:11px;font-size:15px;}
     .lv{padding:11px 0;}
     .lv select,.lv input[type=text]{padding:10px;font-size:14px;}
