@@ -32,6 +32,7 @@
   .chip.off{opacity:.4;}
   .add{background:#11151c;border:1px solid #1b2230;color:#9aa6b8;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:13px;}
   .add:hover{border-color:#2c3a52;color:#e6edf6;}
+  #obBtn.on{background:#1f6feb;border-color:#1f6feb;color:#fff;}
   #chart{position:absolute;top:34px;left:0;right:0;bottom:0;}
   /* popovers */
   .pop{position:absolute;z-index:30;background:#0f131a;border:1px solid #232d3e;border-radius:8px;padding:10px;display:none;box-shadow:0 8px 24px #000a;}
@@ -311,7 +312,7 @@ function closePop(){document.getElementById("indPop").classList.remove("on");edi
 function goPop(){const type=document.getElementById("pType").value,params={};document.querySelectorAll("#pParams [data-p]").forEach(i=>params[i.dataset.p]=i.dataset.str?i.value:parseFloat(i.value));const color=document.getElementById("pColor").value;if(editId){const ind=inds.find(x=>x.id===editId);Object.assign(ind,{type,params:Object.assign({},ind.params,params),color});build(ind);}else{const ind={id:id(),type,params,color,visible:true};inds.push(ind);build(ind);}defColors[type]=color;saveDefColors();save();chips();closePop();}
 
 /* ---- levels ---- */
-async function loadLevels(){levels=await(await fetch("/api/levels")).json();redraw();}
+async function loadLevels(){levels=await(await fetch("/api/levels")).json();redraw();document.getElementById("obBtn").classList.toggle("on",obActive());}
 function redraw(){Object.values(pLines).forEach(p=>{try{cs.removePriceLine(p);}catch(e){}});for(const k in pLines)delete pLines[k];levels.filter(l=>l.coin===coin&&l.kind!=="line"&&l.kind!=="fib"&&l.kind!=="confluence").forEach(draw);drawOverlay();renderAlerts();}
 const draw=l=>pLines[l.id]=cs.createPriceLine({price:l.price,color:l.color||"#1f6feb",lineWidth:1,lineStyle:LC.LineStyle.Dashed,axisLabelVisible:true,title:(l.alert_enabled?"🔔":"")+(l.note||"")});
 async function addLevel(pr){const p=Math.round(pr*100)/100;const l=await(await fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coin,price:p,direction:"cross",alert_enabled:false})})).json();levels.push(l);draw(l);renderAlerts();document.getElementById("alerts").classList.add("on");}
@@ -377,45 +378,74 @@ async function toggleHistory(){
   }catch(e){toast("couldn't load history");}
 }
 
-/* ---- order-book walls (heaviest resting bids/asks) ---- */
-/* Same idea as option levels: drawn as real levels (note prefixed 📊) so they
-   render on the chart AND show in alerts where you can arm 🔔. Buy walls =
-   bids (where buyers/longs sit); sell walls = asks (where sellers/shorts sit). */
-function toggleOrderbookWalls(){
-  const existing=levels.filter(l=>l.coin===coin&&(l.note||"").startsWith("📊"));
-  if(existing.length){drawOrderbookWalls();return;}          // walls up -> toggle off
-  document.getElementById("obPop").classList.toggle("on");   // else pick $ range, then Show
+/* ---- order-book walls (heaviest combined resting-order zones) ---- */
+/* "Show walls" = a LIVE view: client-side price lines that re-fetch the book
+   every few seconds and stay on until you tap 📊 again. They aren't saved as
+   levels (no disk churn, nothing to clean up). The 🔔 preset instead saves a
+   snapshot as real armed levels so Telegram can alert on the biggest walls. */
+const OB_REFRESH_MS=5000;
+const obMoney=n=>n>=1e6?"$"+(n/1e6).toFixed(1)+"M":"$"+(n/1e3).toFixed(0)+"k";
+let obLive=null;  // active live session: {lines:[], timer, min, agg}
+function obStop(){if(obLive){clearInterval(obLive.timer);obLive.lines.forEach(pl=>{try{cs.removePriceLine(pl);}catch(e){}});obLive=null;}document.getElementById("obBtn").classList.remove("on");}
+function obActive(){return !!obLive||levels.some(l=>l.coin===coin&&(l.note||"").startsWith("📊"));}
+async function obRefresh(){
+  if(!obLive)return;const s=obLive;
+  try{
+    const d=await(await fetch(`/api/orderbookwalls?coin=${encodeURIComponent(coin)}&min=${s.min}&agg=${s.agg}`)).json();
+    if(!obLive||obLive!==s)return;                 // toggled off / restarted during the fetch
+    if(d.error)return;
+    const fresh=[];
+    const add=(px,title,color)=>fresh.push(cs.createPriceLine({price:px,color,lineWidth:1,lineStyle:LC.LineStyle.Dashed,axisLabelVisible:true,title}));
+    for(const b of (d.bids||[]))add(b.px,`📊 Buy ${obMoney(b.notional)} · ${b.orders} ord`,"#26a69a");
+    for(const a of (d.asks||[]))add(a.px,`📊 Sell ${obMoney(a.notional)} · ${a.orders} ord`,"#ef5350");
+    s.lines.forEach(pl=>{try{cs.removePriceLine(pl);}catch(e){}});  // swap: add new, then drop old = no flicker
+    s.lines=fresh;
+  }catch(e){}
 }
+async function obStartLive(min,agg){
+  obStop();
+  obLive={lines:[],timer:null,min,agg};
+  document.getElementById("obBtn").classList.add("on");
+  await obRefresh();
+  if(!obLive)return;                                // toggled off during first fetch
+  obLive.timer=setInterval(obRefresh,OB_REFRESH_MS);
+  toast(obLive.lines.length?`📊 live walls ON — updating every ${OB_REFRESH_MS/1000}s · tap 📊 to turn off`
+                           :"📊 live ON but no walls that big yet — lower Min wall $ or widen the zone");
+}
+function toggleOrderbookWalls(){
+  if(obActive()){                                   // anything up (live view or armed snapshot) -> turn all off
+    obStop();
+    (async()=>{for(const l of levels.filter(l=>l.coin===coin&&(l.note||"").startsWith("📊")))await del(l.id);})();
+    toast("order-book walls off");
+    return;
+  }
+  document.getElementById("obPop").classList.toggle("on");
+}
+// 🔔 preset: save a snapshot as real levels, arming the single biggest wall each side.
 async function drawOrderbookWalls(minN,agg,arm){
-  const existing=levels.filter(l=>l.coin===coin&&(l.note||"").startsWith("📊"));
-  // "Show walls" toggles off if already up; the alert preset always redraws fresh.
-  if(existing.length){for(const l of existing)await del(l.id);if(!arm){toast("order-book walls removed");return;}}
-  toast(arm?"arming biggest walls…":"loading order-book walls…");
+  for(const l of levels.filter(l=>l.coin===coin&&(l.note||"").startsWith("📊")))await del(l.id);  // fresh snapshot
+  toast("arming biggest walls…");
   try{
     const d=await(await fetch(`/api/orderbookwalls?coin=${encodeURIComponent(coin)}&min=${minN}&agg=${agg}`)).json();
     if(d.error){toast(d.error);return;}
-    const money=n=>n>=1e6?"$"+(n/1e6).toFixed(1)+"M":"$"+(n/1e3).toFixed(0)+"k";
     const mid=d.mid||0;
     // armIt -> create the level pre-armed; direction points the way price must
     // travel to reach the wall (up into a sell wall above, down into a buy wall below).
     const mk=async(price,note,color,armIt)=>{if(price==null)return;const dir=armIt?(price>=mid?"up":"down"):"cross";const l=await(await fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coin,price,direction:dir,alert_enabled:!!armIt,note,color})})).json();levels.push(l);draw(l);};
     const bigBid=(d.bids||[])[0],bigAsk=(d.asks||[])[0];  // API returns each side sorted biggest-first
-    for(const b of (d.bids||[]))await mk(b.px,`📊 Buy wall ${money(b.notional)} · ${b.orders} ord`,"#26a69a",arm&&b===bigBid);
-    for(const a of (d.asks||[]))await mk(a.px,`📊 Sell wall ${money(a.notional)} · ${a.orders} ord`,"#ef5350",arm&&a===bigAsk);
+    for(const b of (d.bids||[]))await mk(b.px,`📊 Buy wall ${obMoney(b.notional)} · ${b.orders} ord`,"#26a69a",arm&&b===bigBid);
+    for(const a of (d.asks||[]))await mk(a.px,`📊 Sell wall ${obMoney(a.notional)} · ${a.orders} ord`,"#ef5350",arm&&a===bigAsk);
+    document.getElementById("obBtn").classList.add("on");
     renderAlerts();
     const nb=(d.bids||[]).length,na=(d.asks||[]).length;
     if(!nb&&!na){toast("no walls that big — lower Min wall $ or widen the zone");return;}
-    if(arm){
-      const p=[];if(bigBid)p.push(`buy ${money(bigBid.notional)} @ ${bigBid.px}`);if(bigAsk)p.push(`sell ${money(bigAsk.notional)} @ ${bigAsk.px}`);
-      toast(`🔔 armed biggest ${p.join(" · ")} — Telegram fires when price reaches it`);
-    }else{
-      toast(`${nb} buy · ${na} sell walls · tap 🔔 in alerts to arm`);
-    }
+    const p=[];if(bigBid)p.push(`buy ${obMoney(bigBid.notional)} @ ${bigBid.px}`);if(bigAsk)p.push(`sell ${obMoney(bigAsk.notional)} @ ${bigAsk.px}`);
+    toast(`🔔 armed biggest ${p.join(" · ")} — Telegram fires when price reaches it`);
   }catch(e){toast("couldn't load order-book walls");}
 }
 
 /* ---- wiring ---- */
-function setCoin(c){if(!c)return;clearHist();coin=c;load_().then(()=>{chips();redraw();connect();});}
+function setCoin(c){if(!c)return;clearHist();coin=c;load_().then(()=>{chips();redraw();connect();if(obLive)obRefresh();document.getElementById("obBtn").classList.toggle("on",obActive());});}
 async function loadMarkets(){const sym=document.getElementById("sym");let list=null;try{const r=await fetch("/api/markets");const j=await r.json();if(Array.isArray(j)&&j.length)list=j;}catch(e){}
   if(!list)list=Object.entries(COINS).map(([k,v])=>({coin:v,sym:k,vol:0}));
   sym.innerHTML=list.map(m=>`<option value="${m.coin}"${m.coin===coin?" selected":""}>${m.sym}</option>`).join("");}
@@ -462,7 +492,7 @@ function init(){mkChart();fillTypes();chips();
   document.getElementById("opHistBtn").onclick=toggleHistory;
   document.getElementById("obBtn").onclick=toggleOrderbookWalls;
   const obParams=()=>({mn:Math.max(0,+document.getElementById("obMin").value||1000000),agg:+document.getElementById("obAgg").value||3});
-  document.getElementById("obGo").onclick=()=>{const{mn,agg}=obParams();document.getElementById("obPop").classList.remove("on");drawOrderbookWalls(mn,agg,false);};
+  document.getElementById("obGo").onclick=()=>{const{mn,agg}=obParams();document.getElementById("obPop").classList.remove("on");obStartLive(mn,agg);};
   document.getElementById("obAlertGo").onclick=()=>{const{mn,agg}=obParams();document.getElementById("obPop").classList.remove("on");drawOrderbookWalls(mn,agg,true);};
   document.getElementById("muteBtn").onclick=toggleMute;
   document.getElementById("confBtn").onclick=openConf;
