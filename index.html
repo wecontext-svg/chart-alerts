@@ -132,6 +132,8 @@
 <div class="pop" id="alerts">
   <button class="add" id="muteBtn" style="width:100%;margin-bottom:6px"></button>
   <button class="add" id="longBtn" style="width:100%;margin-bottom:6px">🟢 Long setup score (auto)</button>
+  <button class="add" id="planBtn" style="width:100%;margin-bottom:6px">⭐ Best long entry (plan + arm)</button>
+  <button class="add" id="scanBtn" style="width:100%;margin-bottom:6px">📋 Scan top coins now</button>
   <button class="add" id="confBtn" style="width:100%;margin-bottom:6px">🔗 New indicator / confluence alert</button>
   <button class="add" id="jrnBtn" style="width:100%;margin-bottom:6px">📒 Signal journal</button>
   <button class="add" id="testBtn" style="width:100%;margin-bottom:6px">Send test Telegram alert</button>
@@ -460,7 +462,7 @@ async function drawOrderbookWalls(minN,agg,arm){
 }
 
 /* ---- wiring ---- */
-function setCoin(c){if(!c)return;clearHist();clearAllZones();coin=c;load_().then(()=>{chips();redraw();connect();if(obLive)obRefresh();document.getElementById("obBtn").classList.toggle("on",obActive());});}
+function setCoin(c){if(!c)return;clearHist();clearAllZones();clearPlan();coin=c;load_().then(()=>{chips();redraw();connect();if(obLive)obRefresh();document.getElementById("obBtn").classList.toggle("on",obActive());});}
 async function loadMarkets(){const sym=document.getElementById("sym");let list=null;try{const r=await fetch("/api/markets");const j=await r.json();if(Array.isArray(j)&&j.length)list=j;}catch(e){}
   if(!list)list=Object.entries(COINS).map(([k,v])=>({coin:v,sym:k,vol:0}));
   sym.innerHTML=list.map(m=>`<option value="${m.coin}"${m.coin===coin?" selected":""}>${m.sym}</option>`).join("");}
@@ -514,6 +516,25 @@ async function createLongPreset(){
   levels.push(l);renderAlerts();
   toast(`🟢 LONG setup armed on ${coin.split(":").pop()} — Telegram at ≥5/6 (4h close). Tap ✎ in 🔔 to customize.`);
 }
+/* 📋 on-demand market scan: clean-core checklist across the top-volume coins,
+   shown in the journal panel. The server also Telegrams this daily. */
+async function runScan(){
+  document.getElementById("alerts").classList.remove("on");
+  const p=document.getElementById("jrnPop");p.classList.add("on");
+  const b=document.getElementById("jrnBody");b.textContent="scanning top 12 coins… (~15s)";
+  try{
+    const d=await(await fetch("/api/scan?n=12")).json();
+    if(d.error){b.textContent=d.error;return;}
+    const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
+    let h="<b style='color:#e6edf6'>📋 LONG scan — top 12 by volume</b><div class='mut' style='font-size:10px;margin:2px 0 6px'>score = clean-core checklist (trend·EMA200·VWAP·volume·RSI·funding) · a daily digest also goes to Telegram</div>";
+    for(const r of (d.results||[])){
+      const ic=r.score>=5?"🟢":r.score>=4?"🟡":"⚪";
+      h+=`<div style="margin:4px 0">${ic} <b>${esc(r.coin.split(":").pop())}</b> ${r.score}/6 @ ${r.px}${(r.misses||[]).length&&r.score>=3?`<br><span class="mut" style="font-size:10px">needs: ${esc(r.misses.join(", "))}</span>`:""}</div>`;
+    }
+    if(!(d.results||[]).length)h+="<div class='mut'>no data</div>";
+    b.innerHTML=h;
+  }catch(e){b.textContent="scan failed";}
+}
 async function openJournal(){
   document.getElementById("alerts").classList.remove("on");
   const p=document.getElementById("jrnPop");p.classList.add("on");
@@ -526,7 +547,10 @@ async function openJournal(){
     let h="<b style='color:#e6edf6'>Setups — % green after 4h</b>";
     for(const s of (d.stats||[]).slice(0,8)){const w=s["4h"];h+=`<div style="margin:5px 0">${esc(s.coin.split(":").pop())} · ${esc(s.label)}<br><span class="mut">${s.n} signal${s.n>1?"s":""}${w?` · <b style="color:${w.win>=55?'#26a69a':w.win<=45?'#ef5350':'#e6edf6'}">${w.win}% green</b> +4h · median ${w.med>0?"+":""}${w.med}%`:" · results pending"}</span></div>`;}
     h+="<hr style='border:0;border-top:1px solid #1b2230;margin:8px 0'><b style='color:#e6edf6'>Recent signals</b>";
-    for(const e of (d.entries||[]).slice(0,20)){const dt=new Date(e.ts*1000),o=e.out||{};h+=`<div style="margin:5px 0">${String(dt.getUTCMonth()+1).padStart(2,"0")}-${String(dt.getUTCDate()).padStart(2,"0")} ${String(dt.getUTCHours()).padStart(2,"0")}:${String(dt.getUTCMinutes()).padStart(2,"0")} <b>${esc(e.coin.split(":").pop())}</b> ${esc(e.label)} @ ${e.price}<br><span class="mut">+1h ${pc(o["1h"])} · +4h ${pc(o["4h"])} · +1d ${pc(o["1d"])}</span></div>`;}
+    for(const e of (d.entries||[]).slice(0,20)){const dt=new Date(e.ts*1000),o=e.out||{};
+      const mm=(e.up!=null&&e.dd!=null)?` · <span style="color:#26a69a">↑${e.up>0?"+":""}${(+e.up).toFixed(1)}%</span> <span style="color:#ef5350">↓${(+e.dd).toFixed(1)}%</span>`:"";
+      const wh=(e.why||[]).length?`<br><span class="mut" style="font-size:10px">${esc(e.why.join("  "))}</span>`:"";
+      h+=`<div style="margin:5px 0">${String(dt.getUTCMonth()+1).padStart(2,"0")}-${String(dt.getUTCDate()).padStart(2,"0")} ${String(dt.getUTCHours()).padStart(2,"0")}:${String(dt.getUTCMinutes()).padStart(2,"0")} <b>${esc(e.coin.split(":").pop())}</b> ${esc(e.label)} @ ${e.price}<br><span class="mut">+1h ${pc(o["1h"])} · +4h ${pc(o["4h"])} · +1d ${pc(o["1d"])}${mm}</span>${wh}</div>`;}
     b.innerHTML=h;
   }catch(e){b.textContent="couldn't load journal";}
 }
@@ -557,6 +581,35 @@ async function toggleZone(id){
     toast(zoneState[id].band?`🎯 entry zone ≈ ${d.zone.lo.toFixed(2)}–${d.zone.hi.toFixed(2)}${st?" · also needs: "+st:""}`
                             :`price conditions don't overlap right now${st?" · "+st:""}`);
   }catch(e){toast("couldn't compute entry zone");}
+}
+/* ⭐ best long entry: server clusters support levels (EMA200/EMA50d/VWAPs/
+   swing lows + put wall/buy wall as weak evidence), picks the strongest
+   realistic cluster. We draw the entry line + each member level as a labeled
+   explanation, then ARM a real alert at that price — when it's hit, the
+   journal records the market state and tracks drawdown/uprise for 24h. */
+let planState=null;
+function clearPlan(){if(planState){planState.lines.forEach(pl=>{try{cs.removePriceLine(pl);}catch(e){}});planState=null;}}
+async function bestLongPlan(){
+  if(planState){clearPlan();toast("long plan hidden (alert stays armed — delete it in 🔔 if unwanted)");return;}
+  toast("computing best long entry…");
+  try{
+    const d=await(await fetch(`/api/longplan?coin=${encodeURIComponent(coin)}`)).json();
+    if(d.error){toast(d.error);return;}
+    const lines=[];
+    const mk=(p,t,c,big)=>{if(p==null)return;lines.push(cs.createPriceLine({price:p,color:c,lineWidth:big?2:1,lineStyle:big?LC.LineStyle.Solid:LC.LineStyle.Dotted,axisLabelVisible:true,title:t}));};
+    for(const m of d.members)mk(m.price,`${m.w>=3?"🟩":m.w===2?"🟨":"⬜"} ${m.label}`,m.w>=3?"#26a69a":m.w===2?"#8b96a8":"#5c6675");
+    for(const o of (d.overhead||[]))mk(o.price,`⛔ ${o.label}`,"#ef5350");
+    mk(d.entry,`⭐ LONG entry (${d.mode})`,"#f5c542",true);
+    planState={lines};
+    // arm the entry as a real level alert (replace any previous ⭐ for this coin)
+    for(const l of levels.filter(x=>x.coin===coin&&(x.note||"").startsWith("⭐")))await del(l.id);
+    const reason=d.members.slice(0,3).map(m=>m.label.split(" — ")[0]).join(" + ");
+    const dir=d.entry<=d.spot?"down":"up";
+    const l=await(await fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coin,price:d.entry,direction:dir,alert_enabled:true,note:`⭐ LONG plan: ${reason}`,color:"#f5c542"})})).json();
+    levels.push(l);draw(l);renderAlerts();
+    const oh=(d.overhead||[])[0];
+    toast(`⭐ entry ≈ ${d.entry} (${d.mode}, spot ${d.spot}) — armed & journaled on hit. Why: ${reason}${oh?` · ⛔ ceiling: ${oh.label.split(" — ")[0]} @ ${oh.price}`:""}`);
+  }catch(e){toast("couldn't compute long plan");}
 }
 let confEditId=null;
 function openConf(){confEditId=null;document.getElementById("alerts").classList.remove("on");const box=document.getElementById("confRows");box.innerHTML="";box.appendChild(condRow());document.getElementById("confErr").textContent="";document.getElementById("confStyle").value="all";document.getElementById("confThr").value=8;document.getElementById("confNote").value="";document.getElementById("confSave").textContent="Create alert";document.getElementById("confPop").classList.add("on");}
@@ -609,6 +662,8 @@ function init(){mkChart();fillTypes();chips();
   document.getElementById("muteBtn").onclick=toggleMute;
   document.getElementById("confBtn").onclick=openConf;
   document.getElementById("longBtn").onclick=createLongPreset;
+  document.getElementById("planBtn").onclick=bestLongPlan;
+  document.getElementById("scanBtn").onclick=runScan;
   document.getElementById("jrnBtn").onclick=openJournal;
   document.getElementById("jrnX").onclick=()=>document.getElementById("jrnPop").classList.remove("on");
   document.getElementById("confAdd").onclick=()=>{if(document.querySelectorAll("#confRows .condrow").length<12)document.getElementById("confRows").appendChild(condRow());};
