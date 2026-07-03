@@ -611,6 +611,153 @@ async def api_orderbook_walls(request):
     return web.json_response(res)
 
 
+def _rsi_close_for(closes, period, target):
+    """Hypothetical next close that would put RSI exactly at `target`.
+    RSI is monotonically increasing in the new close, so binary-search it."""
+    if len(closes) < period + 1:
+        return None
+    base = closes[-1]
+    lo, hi = base * 0.7, base * 1.3
+    rlo, rhi = _rsi(closes + [lo], period), _rsi(closes + [hi], period)
+    if rlo is None or rhi is None:
+        return None
+    if target <= rlo:   # even a -30% close keeps RSI above target
+        return lo
+    if target >= rhi:   # even a +30% close keeps RSI below target
+        return hi
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        if _rsi(closes + [mid], period) < target:
+            lo = mid
+        else:
+            hi = mid
+    return round((lo + hi) / 2, 6)
+
+
+def _cond_price_range(c, ctx, spot):
+    """(lo, hi) price band where this condition would be met at the next close;
+    None side = unbounded. Returns None for conditions price can't solve
+    (trend, volume, funding, patterns...)."""
+    t = c.get("type"); op = c.get("op", ">")
+    w = float(c.get("within", 0.5)) / 100.0
+
+    def around(v):
+        if v is None:
+            return None
+        if op == "near":
+            return (v * (1 - w), v * (1 + w))
+        return (v, None) if op == ">" else (None, v)
+
+    try:
+        if t == "price":
+            return around(float(c.get("value")))
+        if t == "ema":
+            # next close c > EMA_new(c) simplifies to c > current EMA — exact
+            return around(_ema(ctx["closes"], int(c.get("period", 45))))
+        if t == "vwap":
+            return around(_vwap(ctx["candles"], c.get("anchor", "week")))
+        if t == "avwap":
+            at = c.get("anchorT")
+            if at in (None, ""):
+                return None
+            return around(_vwap_anchored(ctx["candles"], int(float(at))))
+        if t == "opt":
+            o = ctx.get("opt") or {}
+            return around(_f(o.get(c.get("level", "max_pain"))))
+        if t == "optroom":
+            o = ctx.get("opt") or {}
+            cw = _f(o.get("call_wall"))
+            return (None, cw / (1 + float(c.get("value", 3)) / 100.0)) if cw else None
+        if t == "rsi":
+            cstar = _rsi_close_for(ctx["closes"], int(c.get("period", 14)),
+                                   float(c.get("value")))
+            if cstar is None:
+                return None
+            return (cstar, None) if op == ">" else (None, cstar)
+        if t == "rsiband":
+            p = int(c.get("period", 14))
+            return (_rsi_close_for(ctx["closes"], p, float(c.get("lo", 40))),
+                    _rsi_close_for(ctx["closes"], p, float(c.get("hi", 65))))
+        if t == "buywall":
+            bk = ctx.get("book") or {}
+            mn = float(c.get("min", 1)) * 1e6
+            pct = float(c.get("pct", 1.5)) / 100.0
+            bids = [b for b in bk.get("bids") or [] if b["notional"] >= mn]
+            if not bids:
+                return None
+            b = max(bids, key=lambda x: x["px"])  # nearest qualifying wall below
+            return (b["px"], b["px"] * (1 + pct))
+        if t == "nosellwall":
+            bk = ctx.get("book") or {}
+            mn = float(c.get("min", 3)) * 1e6
+            pct = float(c.get("pct", 1.0)) / 100.0
+            asks = [a for a in bk.get("asks") or [] if a["notional"] >= mn]
+            if not asks:
+                return None  # nothing blocking anywhere -> no price constraint
+            a = min(asks, key=lambda x: x["px"])
+            return (None, a["px"] / (1 + pct))
+    except Exception:
+        return None
+    return None
+
+
+async def api_score_zone(request):
+    """📍 For a score/confluence alert: the approximate price band where the
+    price-solvable conditions would be met, plus met/not-met state for the
+    rest. Powers the on-chart 'where should price be' view."""
+    lid = request.query.get("id", "")
+    async with levels_lock:
+        l = next((x for x in LEVELS if x["id"] == lid), None)
+    if not l or l.get("kind") not in ("confluence", "score"):
+        return web.json_response({"error": "not a confluence/score alert"}, status=404)
+    session = request.app["session"]
+    coin = l["coin"]
+    cx = (await fetch_ctx(session, [coin])).get(coin) or {}
+    spot = cx.get("px")
+    if spot is None:
+        return web.json_response({"error": "no live price"}, status=502)
+    conds = l.get("conditions") or []
+    tfs = {l.get("timeframe", "4h")} | {c["tf"] for c in conds if c.get("tf")}
+    candle_map = {}
+    for tf in tfs:
+        candle_map[(coin, tf)] = await get_candles(session, coin, tf)
+    opt = (await get_option_levels_cached(session, coin)
+           if any(c.get("type") in ("opt", "optroom") for c in conds) else None)
+    book = (await get_book_cached(session, coin)
+            if any(c.get("type") in ("buywall", "nosellwall") for c in conds) else None)
+    base_ctx = ctx_from(l, cx, candle_map)
+    base_ctx["opt"], base_ctx["book"] = opt, book
+    ranges, states = [], []
+    lo = hi = None
+    for c in conds:
+        if c.get("tf") and c["tf"] != l.get("timeframe", "4h"):
+            cctx = ctx_from(l, cx, candle_map, tf=c["tf"])
+            cctx["opt"], cctx["book"] = opt, book
+        else:
+            cctx = base_ctx
+        met = bool(eval_condition(c, cctx))
+        rng = _cond_price_range(c, cctx, spot)
+        if rng and not (rng[0] is None and rng[1] is None):
+            rlo, rhi = rng
+            ranges.append({"text": cond_text(c), "met": met,
+                           "lo": round(rlo, 6) if rlo is not None else None,
+                           "hi": round(rhi, 6) if rhi is not None else None})
+            if rlo is not None:
+                lo = rlo if lo is None else max(lo, rlo)
+            if rhi is not None:
+                hi = rhi if hi is None else min(hi, rhi)
+        else:
+            states.append({"text": cond_text(c), "met": met})
+    zone = None
+    if ranges:
+        zlo = lo if lo is not None else spot * 0.9   # clamp open sides for display
+        zhi = hi if hi is not None else spot * 1.1
+        if zlo < zhi:
+            zone = {"lo": round(zlo, 6), "hi": round(zhi, 6)}
+    return web.json_response({"spot": spot, "ranges": ranges,
+                              "states": states, "zone": zone})
+
+
 async def api_journal(request):
     """Signal journal: recent fired alerts + per-setup outcome stats, so you
     can see which setups actually make money on your coins."""
@@ -1399,6 +1546,7 @@ def make_app():
         web.get("/api/optionhistory", api_option_history),
         web.get("/api/orderbookwalls", api_orderbook_walls),
         web.get("/api/journal", api_journal),
+        web.get("/api/scorezone", api_score_zone),
     ])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
