@@ -231,6 +231,74 @@ def record_opt_snapshot(coin, res):
     save_opthist()
 
 
+# JOURNAL logs every fired alert with its entry price, then fills in where
+# price actually went +1h/+4h/+1d later — so you can SEE which setups work
+# on your coins instead of guessing. Feeds the 📒 view in the UI.
+JOURNAL_FILE = STATE_DIR / "journal.json"
+J_HORIZONS = {"1h": 3600, "4h": 14400, "1d": 86400}
+
+
+def load_journal():
+    if JOURNAL_FILE.exists():
+        try:
+            d = json.loads(JOURNAL_FILE.read_text())
+            if isinstance(d, list):
+                return d
+        except Exception:
+            pass
+    return []
+
+
+JOURNAL = load_journal()
+
+
+def save_journal():
+    JOURNAL_FILE.write_text(json.dumps(JOURNAL))
+
+
+def journal_add(coin, label, price):
+    if price is None:
+        return
+    JOURNAL.append({"id": str(int(time.time() * 1000)), "ts": int(time.time()),
+                    "coin": coin, "label": (label or "alert").strip()[:80],
+                    "price": float(price), "out": {}})
+    if len(JOURNAL) > 600:
+        del JOURNAL[:len(JOURNAL) - 600]
+    save_journal()
+
+
+def journal_due():
+    """(entry, horizon) pairs whose outcome is now measurable."""
+    now = time.time()
+    return [(e, h) for e in JOURNAL for h, s in J_HORIZONS.items()
+            if h not in (e.get("out") or {}) and now >= e["ts"] + s]
+
+
+# Short-lived caches so score/confluence conditions can use option levels and
+# the live order book without hammering the feeds every 5s poll.
+_opt_cond_cache = {}
+_book_cond_cache = {}
+
+
+async def get_option_levels_cached(session, coin, ttl=3600):
+    ent = _opt_cond_cache.get(coin)
+    if ent and time.time() - ent[0] < ttl:
+        return ent[1]
+    res = await compute_option_levels(session, coin)
+    _opt_cond_cache[coin] = (time.time(), res)
+    return res
+
+
+async def get_book_cached(session, coin, ttl=60):
+    ent = _book_cond_cache.get(coin)
+    if ent and time.time() - ent[0] < ttl:
+        return ent[1]
+    res = await compute_orderbook_walls(session, coin, min_notional=0.0,
+                                        n_sig=3, per_side=20)
+    _book_cond_cache[coin] = (time.time(), res)
+    return res
+
+
 # ---------- HTTP handlers ----------
 async def index(request):
     return web.FileResponse(BASE / "index.html")
@@ -301,7 +369,8 @@ async def api_create_level(request):
             "repeat": b.get("repeat", "always"),  # always (every cross) | once (fire then disarm)
             "confirm": b.get("confirm", "close" if kind == "confluence" else "intrabar"),
             "timeframe": b.get("timeframe", "4h"),
-            "conditions": b.get("conditions"),  # confluence: list of {type, op, value, ...}
+            "conditions": b.get("conditions"),  # confluence/score: list of {type, op, value, tf, ...}
+            "threshold": b.get("threshold"),   # score: min points to fire
             "note": b.get("note", ""),
             "alert_enabled": bool(b.get("alert_enabled", False)),
             "color": b.get("color", "#2962FF"),
@@ -322,7 +391,7 @@ async def api_update_level(request):
         for l in LEVELS:
             if l["id"] == lid:
                 for k in ("price", "direction", "repeat", "confirm", "timeframe",
-                          "conditions", "note", "alert_enabled", "color"):
+                          "conditions", "note", "alert_enabled", "color", "threshold"):
                     if k in b:
                         l[k] = b[k]
                 l["sides"] = {}     # re-arm after any edit
@@ -539,6 +608,26 @@ async def api_orderbook_walls(request):
     n_sig = max(2, min(5, n_sig))
     res = await compute_orderbook_walls(request.app["session"], coin, min_n, n_sig)
     return web.json_response(res)
+
+
+async def api_journal(request):
+    """Signal journal: recent fired alerts + per-setup outcome stats, so you
+    can see which setups actually make money on your coins."""
+    groups = {}
+    for e in JOURNAL:
+        groups.setdefault((e["coin"], e["label"]), []).append(e)
+    stats = []
+    for (coin_, label), es in groups.items():
+        row = {"coin": coin_, "label": label, "n": len(es)}
+        for h in ("1h", "4h", "1d"):
+            vals = sorted(e["out"][h] for e in es if h in (e.get("out") or {}))
+            if vals:
+                row[h] = {"n": len(vals),
+                          "win": round(100.0 * sum(1 for v in vals if v > 0) / len(vals)),
+                          "med": round(vals[len(vals) // 2], 2)}
+        stats.append(row)
+    stats.sort(key=lambda r: -r["n"])
+    return web.json_response({"entries": JOURNAL[-100:][::-1], "stats": stats})
 
 
 async def api_test(request):
@@ -792,9 +881,10 @@ def _pattern(candles, name):
     return False
 
 
-def ctx_from(l, cx, candle_map):
-    """Build evaluation context for a confluence alert from prefetched data."""
-    tf = l.get("timeframe", "4h")
+def ctx_from(l, cx, candle_map, tf=None):
+    """Build evaluation context for a confluence/score alert from prefetched
+    data. tf overrides the alert's timeframe for per-condition multi-TF."""
+    tf = tf or l.get("timeframe", "4h")
     confirm = l.get("confirm", "close")
     cdata = candle_map.get((l["coin"], tf), [])
     cc = cdata[:-1] if (confirm == "close" and len(cdata) >= 2) else cdata
@@ -820,6 +910,8 @@ def eval_condition(cond, ctx):
         def cmp(a, b):  # null-safe: missing value => not met (no None comparison)
             if a is None or b is None:
                 return False
+            if op == "near":  # within ±X% of the target (location, not direction)
+                return b != 0 and abs(a - b) / abs(b) * 100.0 <= float(cond.get("within", 0.5))
             return a > b if op == ">" else a < b
 
         def val():
@@ -844,6 +936,56 @@ def eval_condition(cond, ctx):
             return cmp(price, _ema(ctx["closes"], int(cond.get("period", 45))))
         if t == "rsi":
             return cmp(_rsi(ctx["closes"], int(cond.get("period", 14))), val())
+        if t == "rsiband":
+            # RSI inside a sane band — e.g. 40..65 = pullback zone, not chasing
+            r = _rsi(ctx["closes"], int(cond.get("period", 14)))
+            return (r is not None
+                    and float(cond.get("lo", 40)) <= r <= float(cond.get("hi", 65)))
+        if t == "volspike":
+            # last closed candle's volume >= mult × average of the prior N bars
+            cc = ctx["candles"]
+            p = int(cond.get("period", 20))
+            if len(cc) < p + 1:
+                return False
+            last = cc[-1]
+            avg = sum(c["v"] for c in cc[-p - 1:-1]) / p
+            if avg <= 0:
+                return False
+            if str(cond.get("green", "1")) == "1" and last["c"] < last["o"]:
+                return False  # require a green (buying) candle
+            return last["v"] >= float(cond.get("mult", 1.5)) * avg
+        if t == "opt":
+            # price vs an option level (max pain / call wall / put wall / gamma flip)
+            o = ctx.get("opt") or {}
+            return cmp(price, _f(o.get(cond.get("level", "max_pain"))))
+        if t == "optroom":
+            # upside room to the call wall — don't buy right under the ceiling
+            o = ctx.get("opt") or {}
+            cw = _f(o.get("call_wall"))
+            if cw is None or not price:
+                return False
+            return (cw - price) / price * 100.0 >= float(cond.get("value", 3))
+        if t == "buywall":
+            # combined buy wall of >= $minM within pct% below price (support)
+            bk = ctx.get("book") or {}
+            mn = float(cond.get("min", 1)) * 1e6
+            pct = float(cond.get("pct", 1.5))
+            return any(b["px"] < price
+                       and (price - b["px"]) / price * 100.0 <= pct
+                       and b["notional"] >= mn
+                       for b in bk.get("bids") or [])
+        if t == "nosellwall":
+            # NO combined sell wall of >= $minM within pct% above (clear runway).
+            # Missing book data => not met (never award the point blindly).
+            bk = ctx.get("book") or {}
+            if not bk or bk.get("error") or bk.get("asks") is None:
+                return False
+            mn = float(cond.get("min", 3)) * 1e6
+            pct = float(cond.get("pct", 1.0))
+            return not any(a["px"] > price
+                           and (a["px"] - price) / price * 100.0 <= pct
+                           and a["notional"] >= mn
+                           for a in bk.get("asks") or [])
         if t == "pattern":
             return _pattern(ctx["candles"], cond.get("name", ""))
         if t == "notrend":
@@ -912,30 +1054,50 @@ def eval_condition(cond, ctx):
         return False
 
 
+_OPT_NAMES = {"max_pain": "max pain", "call_wall": "call wall",
+              "put_wall": "put wall", "gamma_flip": "gamma flip"}
+
+
 def cond_text(c):
     t = c.get("type"); op = c.get("op", ">")
+    if op == "near":
+        op = f"≈ (±{c.get('within', 0.5)}%)"
+    tf = f" [{c['tf']}]" if c.get("tf") else ""
     if t == "price":
-        return f"price {op} {c.get('value')}"
+        return f"price {op} {c.get('value')}" + tf
     if t == "funding":
-        return f"funding {op} {c.get('value')}"
+        return f"funding {op} {c.get('value')}" + tf
     if t == "oi":
-        return f"OI {op} {c.get('value')}"
+        return f"OI {op} {c.get('value')}" + tf
     if t == "vwap":
-        return f"price {op} VWAP({c.get('anchor', 'week')})"
+        return f"price {op} VWAP({c.get('anchor', 'week')})" + tf
     if t == "avwap":
-        return f"price {op} anchored VWAP"
+        return f"price {op} anchored VWAP" + tf
     if t == "ema":
-        return f"price {op} EMA{c.get('period', 45)}"
+        return f"price {op} EMA{c.get('period', 45)}" + tf
     if t == "rsi":
-        return f"RSI {op} {c.get('value')}"
+        return f"RSI {op} {c.get('value')}" + tf
+    if t == "rsiband":
+        return f"RSI {c.get('lo', 40)}–{c.get('hi', 65)}" + tf
+    if t == "volspike":
+        g = " green" if str(c.get("green", "1")) == "1" else ""
+        return f"volume ≥{c.get('mult', 1.5)}× avg{g}" + tf
+    if t == "opt":
+        return f"price {op} {_OPT_NAMES.get(c.get('level'), c.get('level'))}"
+    if t == "optroom":
+        return f"room to call wall ≥{c.get('value', 3)}%"
+    if t == "buywall":
+        return f"buy wall ≥${c.get('min', 1)}M within {c.get('pct', 1.5)}%"
+    if t == "nosellwall":
+        return f"no sell wall ≥${c.get('min', 3)}M within {c.get('pct', 1.0)}%"
     if t == "pattern":
-        return f"candle = {c.get('name')}"
+        return f"candle = {c.get('name')}" + tf
     if t == "notrend":
-        return f"no-trend {c.get('bars', 5)} bars (vs EMA{c.get('emaLen', 50)})"
+        return f"no-trend {c.get('bars', 5)} bars (vs EMA{c.get('emaLen', 50)})" + tf
     if t == "trend":
-        return f"{c.get('dir', 'any')} trend starts (EMA{c.get('emaLen', 50)})"
+        return f"{c.get('dir', 'any')} trend (EMA{c.get('emaLen', 50)})" + tf
     if t == "ics":
-        return f"ICS channel breakout ({c.get('dir', 'any')})"
+        return f"ICS channel breakout ({c.get('dir', 'any')})" + tf
     return str(t)
 
 
@@ -946,6 +1108,18 @@ def format_confluence_alert(l, ctx):
         extra += f" · funding {ctx['funding'] * 100:.4f}%/hr"
     return (f"🔔🔗 <b>{l['coin']}</b> confluence met ({l.get('timeframe', '4h')}"
             f"{', close' if l.get('confirm') == 'close' else ''})\n{desc}\n{extra}"
+            + (f"\n📝 {l['note']}" if l.get("note") else ""))
+
+
+def format_score_alert(l, conds, results, ctx, thr):
+    """Checklist message: which conditions scored and which didn't."""
+    score = sum(1 for r in results if r)
+    rows = "\n".join(("✔ " if r else "✘ ") + cond_text(c)
+                     for c, r in zip(conds, results))
+    return (f"🎯 <b>{l['coin']}</b> setup score <b>{score}/{len(conds)}</b> "
+            f"(need {thr}, {l.get('timeframe', '4h')}"
+            f"{', close' if l.get('confirm') == 'close' else ''})\n{rows}\n"
+            f"price {ctx['price']:.6g}"
             + (f"\n📝 {l['note']}" if l.get("note") else ""))
 
 
@@ -1030,28 +1204,66 @@ async def alert_loop(app):
         try:
             async with levels_lock:
                 active = [l for l in LEVELS if l.get("alert_enabled")]
+            # journal entries whose +1h/+4h/+1d outcome is now measurable also
+            # need a price, even if that coin has no active alert right now
+            due = journal_due()
+            coins = sorted(set(l["coin"] for l in active)
+                           | set(e["coin"] for e, _ in due))
+            ctxs = await fetch_ctx(session, coins) if coins else {}
             if active:
-                coins = sorted(set(l["coin"] for l in active))
-                ctxs = await fetch_ctx(session, coins)
-                # prefetch candles for anything needing them (confluence / candle-close)
+                # prefetch candles (incl. per-condition timeframes) and, where
+                # conditions need them, option levels + the live order book
                 tf_needs = set()
+                opt_coins, book_coins = set(), set()
                 for l in active:
-                    if l.get("kind") == "confluence" or l.get("confirm") == "close":
+                    if l.get("kind") in ("confluence", "score") or l.get("confirm") == "close":
                         tf_needs.add((l["coin"], l.get("timeframe", "4h")))
+                    if l.get("kind") in ("confluence", "score"):
+                        for c in (l.get("conditions") or []):
+                            if c.get("tf"):
+                                tf_needs.add((l["coin"], c["tf"]))
+                            if c.get("type") in ("opt", "optroom"):
+                                opt_coins.add(l["coin"])
+                            if c.get("type") in ("buywall", "nosellwall"):
+                                book_coins.add(l["coin"])
                 candle_map = {}
                 for cn, tf in tf_needs:
                     candle_map[(cn, tf)] = await get_candles(session, cn, tf)
+                opt_map = {c: await get_option_levels_cached(session, c) for c in opt_coins}
+                book_map = {c: await get_book_cached(session, c) for c in book_coins}
 
                 outbox, changed = [], False
                 for l in active:
                     cx = ctxs.get(l["coin"])
                     if not cx:
                         continue
-                    # ---- confluence (N conditions, AND) ----
-                    if l.get("kind") == "confluence":
+                    # ---- confluence (ALL conditions) / score (≥ threshold points) ----
+                    if l.get("kind") in ("confluence", "score"):
                         conds = l.get("conditions") or []
                         ctx = ctx_from(l, cx, candle_map)
-                        met = bool(conds) and all(eval_condition(c, ctx) for c in conds)
+                        ctx["opt"] = opt_map.get(l["coin"])
+                        ctx["book"] = book_map.get(l["coin"])
+                        results = []
+                        for c in conds:
+                            if c.get("tf") and c["tf"] != l.get("timeframe", "4h"):
+                                cctx = ctx_from(l, cx, candle_map, tf=c["tf"])
+                                cctx["opt"], cctx["book"] = ctx["opt"], ctx["book"]
+                            else:
+                                cctx = ctx
+                            results.append(bool(eval_condition(c, cctx)))
+                        if l.get("kind") == "score":
+                            try:
+                                thr = int(l.get("threshold") or 0)
+                            except Exception:
+                                thr = 0
+                            thr = thr or max(1, len(conds) - 2)
+                            met = bool(conds) and sum(results) >= thr
+                            msg = format_score_alert(l, conds, results, ctx, thr) if met else None
+                            jlabel = l.get("note") or "🎯 score"
+                        else:
+                            met = bool(conds) and all(results)
+                            msg = format_confluence_alert(l, ctx) if met else None
+                            jlabel = l.get("note") or "🔗 confluence"
                         prev = l.get("last_met")
                         if prev is None:
                             # first evaluation after create/edit: arm, and if the
@@ -1060,15 +1272,17 @@ async def alert_loop(app):
                             l["last_met"] = met
                             changed = True
                             if met and not muted():
-                                outbox.append(format_confluence_alert(l, ctx))
+                                outbox.append(msg)
+                                journal_add(l["coin"], jlabel, ctx["price"])
                                 if l.get("repeat", "always") == "once":
                                     l["alert_enabled"] = False
                             continue
                         if met != prev:
                             l["last_met"] = met
                             changed = True
-                        if met and not prev and not muted():  # edge: all conditions just became true
-                            outbox.append(format_confluence_alert(l, ctx))
+                        if met and not prev and not muted():  # edge: conditions/score just became true
+                            outbox.append(msg)
+                            journal_add(l["coin"], jlabel, ctx["price"])
                             if l.get("repeat", "always") == "once":
                                 l["alert_enabled"] = False
                         continue
@@ -1090,6 +1304,8 @@ async def alert_loop(app):
                             changed = True
                         if fire and not muted():
                             outbox.append(format_alert(l, px, prev, side, target, label))
+                            journal_add(l["coin"], l.get("note")
+                                        or f"{'▲' if side == 'above' else '▼'} {label} {target:g}", px)
                             if l.get("repeat", "always") == "once":
                                 l["alert_enabled"] = False
                                 changed = True
@@ -1100,6 +1316,17 @@ async def alert_loop(app):
                 if outbox:
                     PENDING.extend(outbox)
                     save_outbox()
+            # fill in journal outcomes that just became measurable (+1h/+4h/+1d)
+            if due:
+                jch = False
+                for e, h in due:
+                    px = (ctxs.get(e["coin"]) or {}).get("px")
+                    if px and e.get("price"):
+                        e.setdefault("out", {})[h] = round(
+                            (px - e["price"]) / e["price"] * 100.0, 3)
+                        jch = True
+                if jch:
+                    save_journal()
             # Always flush the durable queue (also retries anything left from a
             # previous failed send / restart). Keep whatever Telegram didn't confirm.
             if PENDING:
@@ -1170,6 +1397,7 @@ def make_app():
         web.get("/api/optionlevels", api_option_levels),
         web.get("/api/optionhistory", api_option_history),
         web.get("/api/orderbookwalls", api_orderbook_walls),
+        web.get("/api/journal", api_journal),
     ])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
