@@ -391,7 +391,8 @@ async def api_update_level(request):
         for l in LEVELS:
             if l["id"] == lid:
                 for k in ("price", "direction", "repeat", "confirm", "timeframe",
-                          "conditions", "note", "alert_enabled", "color", "threshold"):
+                          "conditions", "note", "alert_enabled", "color", "threshold",
+                          "kind"):  # kind: only confluence<->score via the ✎ editor
                     if k in b:
                         l[k] = b[k]
                 l["sides"] = {}     # re-arm after any edit

@@ -339,11 +339,12 @@ function renderAlerts(){
   mine.forEach(l=>{const d=document.createElement("div");d.className="lv";
     if(l.kind==="confluence"||l.kind==="score"){const desc=(l.conditions||[]).map(condText).join(" + ").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
       const icon=l.kind==="score"?`🎯 ≥${l.threshold||Math.max(1,(l.conditions||[]).length-2)}/${(l.conditions||[]).length}`:"🔗";
-      d.innerHTML=`<div class="t"><label><input type="checkbox" ${l.alert_enabled?"checked":""} data-a="${l.id}">🔔</label><span class="px">${icon} ${l.timeframe||'4h'}${l.confirm==='close'?' · close':''}</span><span class="x" data-d="${l.id}">✕</span></div><div class="mut" style="margin:3px 0">${(l.note?l.note+" · ":"")+desc}</div><div class="r2"><select data-rep="${l.id}">${repopts(l.repeat)}</select></div>`;
+      d.innerHTML=`<div class="t"><label><input type="checkbox" ${l.alert_enabled?"checked":""} data-a="${l.id}">🔔</label><span class="px">${icon} ${l.timeframe||'4h'}${l.confirm==='close'?' · close':''}</span><span class="x" data-e="${l.id}" title="edit conditions & threshold">✎</span><span class="x" data-d="${l.id}">✕</span></div><div class="mut" style="margin:3px 0">${(l.note?l.note+" · ":"")+desc}</div><div class="r2"><select data-rep="${l.id}">${repopts(l.repeat)}</select></div>`;
     }else{const head=l.kind==="line"?`${({trend:'╱',ray:'→',extended:'⟷'})[l.type]||'╱'} ${l.type} <span class="mut">~${(+l.price).toFixed(2)}</span>`:l.kind==="fib"?`𝑓 fib <span class="mut">${(+l.p1.price).toFixed(1)}→${(+l.p2.price).toFixed(1)}</span>`:`${l.price}`;
       d.innerHTML=`<div class="t"><label><input type="checkbox" ${l.alert_enabled?"checked":""} data-a="${l.id}">🔔</label><span class="px">${head}</span><span class="x" data-d="${l.id}">✕</span></div><div class="r2"><select data-dir="${l.id}"><option value="cross"${l.direction==="cross"?" selected":""}>either</option><option value="up"${l.direction==="up"?" selected":""}>up</option><option value="down"${l.direction==="down"?" selected":""}>down</option></select><select data-rep="${l.id}">${repopts(l.repeat)}</select></div><div class="r2"><label class="mut" style="display:flex;align-items:center;gap:4px"><input type="checkbox" ${l.confirm==='close'?'checked':''} data-cf="${l.id}">on close</label><select data-cftf="${l.id}">${tfopts(l.timeframe)}</select></div><div class="r2"><input type="text" placeholder="note" value="${l.note||""}" data-note="${l.id}"></div>`;}
     box.appendChild(d);});
   box.querySelectorAll("[data-d]").forEach(b=>b.onclick=()=>del(b.dataset.d));
+  box.querySelectorAll("[data-e]").forEach(b=>b.onclick=()=>editAlert(b.dataset.e));
   box.querySelectorAll("[data-a]").forEach(b=>b.onchange=()=>patch(b.dataset.a,{alert_enabled:b.checked}));
   box.querySelectorAll("[data-dir]").forEach(s=>s.onchange=()=>patch(s.dataset.dir,{direction:s.value}));
   box.querySelectorAll("[data-rep]").forEach(s=>s.onchange=()=>patch(s.dataset.rep,{repeat:s.value}));
@@ -490,28 +491,26 @@ const COND_TYPES={
 };
 function avwapLabel(t){const d=new Date(t*1000);return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getUTCMonth()]} ${d.getUTCDate()}`;}
 function condText(c){const t=c.type,a=c.op==="near"?`≈ (±${c.within||0.5}%)`:(c.op==="<"?"below":"above"),tf=c.tf?` [${c.tf}]`:"";if(t==="price")return`price ${a} ${c.value}`+tf;if(t==="funding")return`funding ${a} ${c.value}`+tf;if(t==="oi")return`OI ${a} ${c.value}`+tf;if(t==="vwap")return`price ${a} VWAP(${c.anchor||"week"})`+tf;if(t==="avwap")return`price ${a} aVWAP(${avwapLabel(c.anchorT)})`+tf;if(t==="ema")return`price ${a} EMA${c.period||45}`+tf;if(t==="rsi")return`RSI ${a} ${c.value}`+tf;if(t==="rsiband")return`RSI ${c.lo??40}–${c.hi??65}`+tf;if(t==="volspike")return`vol ≥${c.mult||1.5}× avg${String(c.green??"1")==="1"?" green":""}`+tf;if(t==="opt")return`price ${a} ${({max_pain:"max pain",call_wall:"call wall",put_wall:"put wall",gamma_flip:"gamma flip"})[c.level]||c.level}`;if(t==="optroom")return`room to call wall ≥${c.value||3}%`;if(t==="buywall")return`buy wall ≥$${c.min||1}M within ${c.pct||1.5}%`;if(t==="nosellwall")return`no sell wall ≥$${c.min||3}M within ${c.pct||1}%`;if(t==="pattern")return`🕯 ${c.name}`;if(t==="notrend")return`no-trend ${c.bars||5} bars (EMA${c.emaLen||50})`+tf;if(t==="trend")return`${c.dir||"any"} trend (EMA${c.emaLen||50})`+tf;if(t==="ics")return`ICS breakout ${c.dir||"any"}`+tf;return t;}
-function renderCondFields(box,type){box.innerHTML="";COND_TYPES[type].fields.forEach(fl=>{let el;if(fl.dyn==="avwap"){el=document.createElement("select");const av=inds.filter(i=>i.type==="vwapa"&&(!i.coin||i.coin===coin));el.innerHTML=av.length?av.map(i=>`<option value="${i.params.anchorT}">⚓ ${avwapLabel(i.params.anchorT)}</option>`).join(""):`<option value="">— draw one with ⚓ first —</option>`;}else if(fl.sel){el=document.createElement("select");el.innerHTML=fl.sel.map(o=>typeof o==="object"?`<option value="${o.v}">${o.l}</option>`:`<option>${o}</option>`).join("");}else{el=document.createElement("input");el.type="number";el.placeholder=fl.ph||"";if(fl.def!=null)el.value=fl.def;}el.dataset.k=fl.k;el.className="cf";box.appendChild(el);});}
-function condRow(){const w=document.createElement("div");w.className="condrow";const ts=document.createElement("select");ts.className="ctype";ts.innerHTML=Object.entries(COND_TYPES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join("");const fields=document.createElement("span");fields.className="cfields";const tfs=document.createElement("select");tfs.className="ctf";tfs.title="timeframe for this condition (blank = alert timeframe)";tfs.innerHTML=`<option value="">alert tf</option><option>5m</option><option>1h</option><option>4h</option><option value="1d">D</option>`;const rm=document.createElement("span");rm.className="cx";rm.textContent="✕";rm.onclick=()=>w.remove();ts.onchange=()=>renderCondFields(fields,ts.value);w.appendChild(ts);w.appendChild(fields);w.appendChild(tfs);w.appendChild(rm);renderCondFields(fields,ts.value);return w;}
-/* one-tap 🟢 LONG setup: 10-point checklist, Telegram fires at ≥8/10 on 4h close.
-   bias: 1d trend up + above EMA200 · location: near weekly VWAP, above max pain
-   · room: to call wall, no sell wall overhead, buy wall support · trigger:
-   volume-confirmed green close · sanity: funding cool, RSI not overheated */
+function renderCondFields(box,type,vals){box.innerHTML="";COND_TYPES[type].fields.forEach(fl=>{let el;if(fl.dyn==="avwap"){el=document.createElement("select");const av=inds.filter(i=>i.type==="vwapa"&&(!i.coin||i.coin===coin));el.innerHTML=av.length?av.map(i=>`<option value="${i.params.anchorT}">⚓ ${avwapLabel(i.params.anchorT)}</option>`).join(""):`<option value="">— draw one with ⚓ first —</option>`;}else if(fl.sel){el=document.createElement("select");el.innerHTML=fl.sel.map(o=>typeof o==="object"?`<option value="${o.v}">${o.l}</option>`:`<option>${o}</option>`).join("");}else{el=document.createElement("input");el.type="number";el.placeholder=fl.ph||"";if(fl.def!=null)el.value=fl.def;}if(vals&&vals[fl.k]!=null)el.value=vals[fl.k];el.dataset.k=fl.k;el.className="cf";box.appendChild(el);});}
+function condRow(vals){const w=document.createElement("div");w.className="condrow";const ts=document.createElement("select");ts.className="ctype";ts.innerHTML=Object.entries(COND_TYPES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join("");if(vals&&vals.type&&COND_TYPES[vals.type])ts.value=vals.type;const fields=document.createElement("span");fields.className="cfields";const tfs=document.createElement("select");tfs.className="ctf";tfs.title="timeframe for this condition (blank = alert timeframe)";tfs.innerHTML=`<option value="">alert tf</option><option>5m</option><option>1h</option><option>4h</option><option value="1d">D</option>`;if(vals&&vals.tf)tfs.value=vals.tf;const rm=document.createElement("span");rm.className="cx";rm.textContent="✕";rm.onclick=()=>w.remove();ts.onchange=()=>renderCondFields(fields,ts.value);w.appendChild(ts);w.appendChild(fields);w.appendChild(tfs);w.appendChild(rm);renderCondFields(fields,ts.value,vals);return w;}
+/* one-tap 🟢 LONG setup — the CLEAN CORE only (solid, testable math; no
+   heuristics): bias = 1d trend up + above EMA200 · location = pullback near
+   weekly VWAP · trigger = volume-confirmed green close · sanity = RSI not
+   overheated, funding cool. Fires at ≥5/6 on 4h close. Option/wall checks
+   were deliberately left OUT (mixed-evidence tier) — add them yourself via
+   ✎ edit if you want them scored. */
 async function createLongPreset(){
   const conditions=[
     {type:"trend",dir:"up",emaLen:50,lookback:50,thresh:70,tf:"1d"},
     {type:"ema",op:">",period:200},
     {type:"vwap",op:"near",anchor:"week",within:0.7},
-    {type:"opt",op:">",level:"max_pain"},
-    {type:"optroom",value:3},
-    {type:"buywall",min:1,pct:1.5},
-    {type:"nosellwall",min:3,pct:1},
     {type:"volspike",mult:1.5,period:20,green:"1"},
-    {type:"funding",op:"<",value:0.0001},
-    {type:"rsiband",lo:40,hi:65,period:14}
+    {type:"rsiband",lo:40,hi:65,period:14},
+    {type:"funding",op:"<",value:0.0001}
   ];
-  const l=await(await fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coin,kind:"score",threshold:8,timeframe:"4h",confirm:"close",repeat:"always",note:"🟢 LONG setup",conditions,alert_enabled:true})})).json();
+  const l=await(await fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coin,kind:"score",threshold:5,timeframe:"4h",confirm:"close",repeat:"always",note:"🟢 LONG setup",conditions,alert_enabled:true})})).json();
   levels.push(l);renderAlerts();
-  toast(`🟢 LONG setup armed on ${coin.split(":").pop()} — Telegram at ≥8/10 (4h close). Edit/delete in 🔔.`);
+  toast(`🟢 LONG setup armed on ${coin.split(":").pop()} — Telegram at ≥5/6 (4h close). Tap ✎ in 🔔 to customize.`);
 }
 async function openJournal(){
   document.getElementById("alerts").classList.remove("on");
@@ -529,12 +528,37 @@ async function openJournal(){
     b.innerHTML=h;
   }catch(e){b.textContent="couldn't load journal";}
 }
-function openConf(){document.getElementById("alerts").classList.remove("on");const box=document.getElementById("confRows");box.innerHTML="";box.appendChild(condRow());document.getElementById("confErr").textContent="";document.getElementById("confPop").classList.add("on");}
-function closeConf(){document.getElementById("confPop").classList.remove("on");}
+let confEditId=null;
+function openConf(){confEditId=null;document.getElementById("alerts").classList.remove("on");const box=document.getElementById("confRows");box.innerHTML="";box.appendChild(condRow());document.getElementById("confErr").textContent="";document.getElementById("confStyle").value="all";document.getElementById("confThr").value=8;document.getElementById("confNote").value="";document.getElementById("confSave").textContent="Create alert";document.getElementById("confPop").classList.add("on");}
+/* ✎ on a 🔗/🎯 row: reopen the editor pre-filled with that alert's conditions,
+   threshold, style, timeframes and note — Save updates it in place. */
+function editAlert(id){
+  const l=levels.find(x=>x.id===id);if(!l)return;
+  confEditId=id;
+  document.getElementById("alerts").classList.remove("on");
+  document.getElementById("confTf").value=l.timeframe||"4h";
+  document.getElementById("confRepeat").value=l.repeat||"always";
+  document.getElementById("confClose").checked=l.confirm==="close";
+  document.getElementById("confStyle").value=l.kind==="score"?"score":"all";
+  document.getElementById("confThr").value=l.threshold||Math.max(1,(l.conditions||[]).length-2);
+  document.getElementById("confNote").value=l.note||"";
+  const box=document.getElementById("confRows");box.innerHTML="";
+  (l.conditions||[]).forEach(c=>box.appendChild(condRow(c)));
+  if(!(l.conditions||[]).length)box.appendChild(condRow());
+  document.getElementById("confErr").textContent="";
+  document.getElementById("confSave").textContent="Save changes";
+  document.getElementById("confPop").classList.add("on");
+}
+function closeConf(){confEditId=null;document.getElementById("confPop").classList.remove("on");}
 function saveConf(){const rows=[...document.querySelectorAll("#confRows .condrow")];const err=document.getElementById("confErr");if(rows.length<1){err.textContent="Add at least 1 condition.";return;}if(rows.length>12){err.textContent="Max 12 conditions.";return;}const conditions=rows.map(r=>{const c={type:r.querySelector(".ctype").value};r.querySelectorAll(".cf").forEach(el=>{c[el.dataset.k]=el.tagName==="SELECT"?el.value:parseFloat(el.value);});const tf=r.querySelector(".ctf").value;if(tf)c.tf=tf;return c;});for(const c of conditions){if(("value" in c)&&isNaN(c.value)){err.textContent="Fill in all condition values.";return;}if(c.type==="avwap"&&!c.anchorT){err.textContent="Draw an anchored VWAP (⚓) on this symbol first, then pick it.";return;}}
   const isScore=document.getElementById("confStyle").value==="score";let thr=0;
   if(isScore){thr=Math.round(+document.getElementById("confThr").value||0);if(!(thr>=1&&thr<=conditions.length)){err.textContent=`Threshold must be 1–${conditions.length} (you have ${conditions.length} condition${conditions.length>1?"s":""}).`;return;}}
-  fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coin,kind:isScore?"score":"confluence",threshold:isScore?thr:null,timeframe:document.getElementById("confTf").value,confirm:document.getElementById("confClose").checked?"close":"intrabar",repeat:document.getElementById("confRepeat").value,note:document.getElementById("confNote").value,conditions,alert_enabled:true})}).then(r=>r.json()).then(l=>{levels.push(l);renderAlerts();closeConf();document.getElementById("alerts").classList.add("on");});}
+  const body={kind:isScore?"score":"confluence",threshold:isScore?thr:null,timeframe:document.getElementById("confTf").value,confirm:document.getElementById("confClose").checked?"close":"intrabar",repeat:document.getElementById("confRepeat").value,note:document.getElementById("confNote").value,conditions};
+  if(confEditId){
+    fetch(`/api/levels/${confEditId}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(r=>r.json()).then(u=>{levels[levels.findIndex(x=>x.id===u.id)]=u;renderAlerts();closeConf();document.getElementById("alerts").classList.add("on");toast("alert updated & re-armed");});
+  }else{
+    fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coin,...body,alert_enabled:true})}).then(r=>r.json()).then(l=>{levels.push(l);renderAlerts();closeConf();document.getElementById("alerts").classList.add("on");});
+  }}
 
 function init(){mkChart();fillTypes();chips();
   const sym=document.getElementById("sym");sym.onchange=()=>setCoin(sym.value);loadMarkets();
