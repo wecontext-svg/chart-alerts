@@ -795,159 +795,6 @@ async def api_score_zone(request):
                               "states": states, "zone": zone})
 
 
-def _swing_lows(candles, k=3, count=4):
-    """Recent pivot lows: bars whose low is the lowest of k bars on each side."""
-    out = []
-    for i in range(k, len(candles) - k):
-        lo = candles[i]["l"]
-        if (all(lo <= candles[i - j]["l"] for j in range(1, k + 1))
-                and all(lo <= candles[i + j]["l"] for j in range(1, k + 1))):
-            out.append((candles[i]["t"], lo))
-    return out[-count:]
-
-
-def _selloff_anchor(candles, min_drop_pct=8.0, k=5):
-    """Bar time (ms) of the swing high that started the most recent big
-    decline (pivot high followed by a drop >= min_drop_pct). The VWAP
-    anchored there = average price of everyone caught in the sell-off —
-    a classic support/reclaim level."""
-    best = None
-    for i in range(k, len(candles) - k):
-        h = candles[i]["h"]
-        if (all(h >= candles[i - j]["h"] for j in range(1, k + 1))
-                and all(h >= candles[i + j]["h"] for j in range(1, k + 1))):
-            after_min = min(c["l"] for c in candles[i:])
-            if h > 0 and (h - after_min) / h * 100.0 >= min_drop_pct:
-                best = candles[i]["t"]  # keep the LATEST qualifying sell-off
-    return best
-
-
-async def api_long_plan(request):
-    """⭐ Best realistic long entry: collect support-type levels (solid tier
-    weighted highest), cluster ones within ~1.2%, score clusters by combined
-    weight + proximity to spot, return the winner with its member levels as
-    the on-chart explanation. mode=pullback (below spot) or reclaim (above)."""
-    coin = request.query.get("coin", "")
-    session = request.app["session"]
-    cx = (await fetch_ctx(session, [coin])).get(coin) or {}
-    spot = cx.get("px")
-    if not spot:
-        return web.json_response({"error": "no live price"}, status=502)
-    c4 = await get_candles(session, coin, "4h")
-    c1 = await get_candles(session, coin, "1d")
-    if len(c4) < 60:
-        return web.json_response({"error": "not enough candle history"}, status=502)
-    closes4 = [c["c"] for c in c4]
-    cands = []  # (price, label, weight)  weight: 3=solid, 2=good, 1=heuristic
-
-    def add(p, label, w):
-        if p and p > 0 and spot * 0.80 <= p <= spot * 1.06:  # realistic reach only
-            cands.append((float(p), label, w))
-
-    add(_ema(closes4, 200), "EMA200 4h — major dynamic support", 3)
-    add(_ema([c["c"] for c in c1], 50), "EMA50 daily — trend support", 3)
-    add(_vwap(c4, "week"), "weekly VWAP — this week's average price", 2)
-    add(_vwap(c4, "month"), "monthly VWAP — this month's average price", 2)
-    for t, lo in _swing_lows(c4, 3, 4):
-        d = dt.datetime.fromtimestamp(t / 1000, dt.timezone.utc)
-        add(lo, f"swing low {d.strftime('%b %d')} — proven buyer level", 2)
-    # AVWAP anchored at the start of the most recent big sell-off:
-    # the average price of everyone trapped in the dump (reclaim level)
-    at = _selloff_anchor(c4)
-    if at:
-        d0 = dt.datetime.fromtimestamp(at / 1000, dt.timezone.utc)
-        add(_vwap_anchored(c4, at // 1000),
-            f"AVWAP from {d0.strftime('%b %d')} sell-off — trapped-seller average", 2)
-    # any anchored VWAPs the user drew themselves (⚓) on this coin
-    for ind in (load_indicators() or []):
-        if ind.get("type") == "vwapa" and (not ind.get("coin") or ind.get("coin") == coin):
-            a = (ind.get("params") or {}).get("anchorT")
-            if a:
-                try:
-                    d0 = dt.datetime.fromtimestamp(float(a), dt.timezone.utc)
-                    add(_vwap_anchored(c4, int(float(a))),
-                        f"your ⚓ AVWAP ({d0.strftime('%b %d')})", 2)
-                except Exception:
-                    pass
-    # options: weekly (nearest expiry) AND monthly opex (bigger OI = more
-    # structural, so monthly put wall gets a higher weight)
-    overhead = []  # ceilings above spot that argue AGAINST longing into them
-
-    def over(p, label):
-        p = _f(p)
-        if p and spot < p <= spot * 1.08:
-            overhead.append({"price": round(p, 4), "label": label})
-
-    optw = await get_option_levels_cached(session, coin)
-    optm = await get_option_levels_cached(session, coin, monthly=True)
-    if optw and not optw.get("error"):
-        add(optw.get("put_wall"), f"put wall wk {optw.get('expiry', '')} — options support", 1)
-        mp = _f(optw.get("max_pain"))
-        if mp and mp <= spot:
-            add(mp, f"max pain wk {optw.get('expiry', '')} — options magnet", 1)
-        over(optw.get("call_wall"), f"call wall wk {optw.get('expiry', '')}")
-    if (optm and not optm.get("error")
-            and optm.get("expiry") != (optw or {}).get("expiry")):
-        add(optm.get("put_wall"), f"put wall MONTHLY {optm.get('expiry', '')} — big-OI support", 2)
-        mp = _f(optm.get("max_pain"))
-        if mp and mp <= spot:
-            add(mp, f"max pain MONTHLY {optm.get('expiry', '')} — options magnet", 1)
-        over(optm.get("call_wall"), f"call wall MONTHLY {optm.get('expiry', '')}")
-    # live order book: up to 3 combined buy walls below as support evidence,
-    # nearest big sell wall above as an overhead ceiling
-    book = await get_book_cached(session, coin)
-    if book and not book.get("error"):
-        bids = sorted((b for b in book.get("bids") or []
-                       if b["notional"] >= 5e5 and b["px"] < spot),
-                      key=lambda x: -x["notional"])[:3]
-        for b in bids:
-            add(b["px"], f"buy wall ${b['notional']/1e6:.1f}M — live orders (can move)", 1)
-        asks = [a for a in book.get("asks") or []
-                if a["notional"] >= 1e6 and a["px"] > spot]
-        if asks:
-            a = min(asks, key=lambda x: x["px"])
-            over(a["px"], f"sell wall ${a['notional']/1e6:.1f}M — live orders (can move)")
-    overhead.sort(key=lambda o: o["price"])
-    if not cands:
-        return web.json_response({"error": "no support levels in realistic range"})
-
-    # cluster levels within 1.2% of each other (greedy, top-down by price)
-    cands.sort(key=lambda x: -x[0])
-    clusters = []
-    for p, label, w in cands:
-        placed = False
-        for cl in clusters:
-            if abs(p - cl["ref"]) / cl["ref"] * 100.0 <= 1.2:
-                cl["members"].append({"price": round(p, 4), "label": label, "w": w})
-                placed = True
-                break
-        if not placed:
-            clusters.append({"ref": p, "members": [{"price": round(p, 4), "label": label, "w": w}]})
-    for cl in clusters:
-        ps = [m["price"] for m in cl["members"]]
-        ws = [m["w"] for m in cl["members"]]
-        cl["entry"] = round(sum(p * w for p, w in zip(ps, ws)) / sum(ws), 4)
-        dist = abs(spot - cl["entry"]) / spot * 100.0
-        # combined evidence + closer-to-spot bonus; below-spot pullbacks preferred
-        cl["score"] = sum(ws) + max(0.0, 2.0 - dist / 3.0) + (1.0 if cl["entry"] <= spot else 0.0)
-        # a ceiling (call wall / big sell wall) within 1.5% above the entry
-        # caps the upside — punish that entry
-        for ov in overhead:
-            gap = (ov["price"] - cl["entry"]) / cl["entry"] * 100.0
-            if 0 < gap <= 1.5:
-                cl["score"] -= 1.5
-    clusters.sort(key=lambda c: -c["score"])
-    best = clusters[0]
-    return web.json_response({
-        "spot": spot,
-        "entry": best["entry"],
-        "mode": "pullback" if best["entry"] <= spot else "reclaim",
-        "members": [{k: m[k] for k in ("price", "label", "w")} for m in best["members"]],
-        "overhead": overhead,
-        "alternatives": [{"entry": c["entry"], "n": len(c["members"])} for c in clusters[1:4]],
-    })
-
-
 async def api_journal(request):
     """Signal journal: recent fired alerts + per-setup outcome stats, so you
     can see which setups actually make money on your coins."""
@@ -1726,15 +1573,21 @@ def _scan_minute():
         return 13 * 60
 
 
-async def scan_setups(session, top_n=12):
-    """Score the clean-core checklist for the top_n coins by 24h volume.
-    Returns sorted [(score, coin, px, misses)] or None on market-data failure."""
-    try:
-        async with session.post(HL_INFO, json={"type": "metaAndAssetCtxs", "dex": "xyz"}) as r:
-            m = await r.json()
-        uni, ctxarr = m[0]["universe"], m[1]
-    except Exception as e:
-        print("scan_setups market fetch error", e)
+async def _top_coins(session, top_n):
+    """[(vol, coin, asset_ctx)] for the busiest coins, or None on failure.
+    One retry after 2s — rapid scans can trip HL's rate limit briefly."""
+    uni = ctxarr = None
+    for attempt in (1, 2):
+        try:
+            async with session.post(HL_INFO, json={"type": "metaAndAssetCtxs", "dex": "xyz"}) as r:
+                m = await r.json()
+            uni, ctxarr = m[0]["universe"], m[1]
+            break
+        except Exception as e:
+            print(f"_top_coins market fetch error (attempt {attempt})", e)
+            if attempt == 1:
+                await asyncio.sleep(2)
+    if uni is None:
         return None
     rows = []
     for i, a in enumerate(uni):
@@ -1746,8 +1599,17 @@ async def scan_setups(session, top_n=12):
             vol = 0.0
         rows.append((vol, a["name"], ctxarr[i]))
     rows.sort(key=lambda x: -x[0])
+    return rows[:top_n]
+
+
+async def scan_setups(session, top_n=12):
+    """Score the clean-core checklist for the top_n coins by 24h volume.
+    Returns sorted [(score, coin, px, misses)] or None on market-data failure."""
+    rows = await _top_coins(session, top_n)
+    if rows is None:
+        return None
     out = []
-    for _vol, name, c in rows[:top_n]:
+    for _vol, name, c in rows:
         cx = {"px": _f(c.get("markPx")), "funding": _f(c.get("funding")) or 0.0,
               "oi": _f(c.get("openInterest")) or 0.0}
         why = await snapshot_why(session, name, cx)
@@ -1757,6 +1619,52 @@ async def scan_setups(session, top_n=12):
                         [w[2:] for w in why if w.startswith("✘")]))
         await asyncio.sleep(0.25)  # be gentle on the API
     out.sort(key=lambda x: -x[0])
+    return out
+
+
+def _trend_state(closes, ema_len=50, lookback=50, thresh=0.70):
+    """('up'|'down'|'none', % distance from EMA50) — the same trend-vs-EMA
+    logic as the chart indicator and alert conditions."""
+    n = len(closes)
+    if n < ema_len + lookback + 1:
+        return None, None
+    ev = _ema_series(closes, ema_len)
+    i = n - 1
+    a = b = 0
+    for j in range(lookback):
+        e = ev[i - j]
+        if e is None:
+            continue
+        if closes[i - j] > e:
+            a += 1
+        elif closes[i - j] < e:
+            b += 1
+    state = ("up" if a / lookback > thresh
+             else "down" if b / lookback > thresh else "none")
+    dist = round((closes[i] - ev[i]) / ev[i] * 100.0, 2) if ev[i] else None
+    return state, dist
+
+
+async def scan_trend(session, top_n, tf, mode):
+    """Trend-state filter scan: mode = up | down | notrend | trend (=all).
+    Uses closed candles only, so states match candle-close alerts."""
+    rows = await _top_coins(session, top_n)
+    if rows is None:
+        return None
+    out = []
+    for _vol, name, c in rows:
+        candles = await get_candles(session, name, tf)
+        closes = [x["c"] for x in candles[:-1]] if len(candles) > 1 else []
+        state, dist = _trend_state(closes)
+        if state is None:
+            continue
+        out.append({"coin": name, "px": _f(c.get("markPx")),
+                    "state": state, "vs_ema": dist})
+        await asyncio.sleep(0.15)
+    if mode in ("up", "down"):
+        out = [r for r in out if r["state"] == mode]
+    elif mode == "notrend":
+        out = [r for r in out if r["state"] == "none"]
     return out
 
 
@@ -1777,17 +1685,29 @@ def format_scan(results, top_n):
 
 
 async def api_scan(request):
-    """📋 on-demand scan for the UI. ?n= how many top-volume coins (3-25)."""
+    """📋 on-demand scan for the UI, with a user-picked filter.
+    ?n=3-25 top-volume coins · ?mode=score|up|down|notrend|trend · ?tf=1h|4h|1d"""
     try:
         n = max(3, min(25, int(request.query.get("n", 12))))
     except Exception:
         n = 12
-    results = await scan_setups(request.app["session"], n)
+    mode = request.query.get("mode", "score")
+    tf = request.query.get("tf", "4h")
+    if tf not in ("1h", "4h", "1d"):
+        tf = "4h"
+    if mode == "score":
+        results = await scan_setups(request.app["session"], n)
+        if results is None:
+            return web.json_response({"error": "market data unavailable"}, status=502)
+        return web.json_response({"mode": "score", "results": [
+            {"coin": nm, "score": s, "px": px, "misses": ms}
+            for s, nm, px, ms in results]})
+    if mode not in ("up", "down", "notrend", "trend"):
+        return web.json_response({"error": f"unknown mode {mode}"}, status=400)
+    results = await scan_trend(request.app["session"], n, tf, mode)
     if results is None:
         return web.json_response({"error": "market data unavailable"}, status=502)
-    return web.json_response({"results": [
-        {"coin": nm, "score": s, "px": px, "misses": ms}
-        for s, nm, px, ms in results]})
+    return web.json_response({"mode": mode, "tf": tf, "scanned": n, "results": results})
 
 
 async def daily_scan_loop(app):
@@ -1871,7 +1791,6 @@ def make_app():
         web.get("/api/orderbookwalls", api_orderbook_walls),
         web.get("/api/journal", api_journal),
         web.get("/api/scorezone", api_score_zone),
-        web.get("/api/longplan", api_long_plan),
         web.get("/api/scan", api_scan),
     ])
     app.on_startup.append(on_startup)

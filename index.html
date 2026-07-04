@@ -3,73 +3,139 @@
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=5, viewport-fit=cover"/>
-<title>HL</title>
+<meta name="theme-color" content="#0b0e14"/>
+<title>HL Chart</title>
+<link rel="preconnect" href="https://unpkg.com" crossorigin/>
+<link rel="preconnect" href="https://api.hyperliquid.xyz" crossorigin/>
 <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
+  /* ---- design tokens ---- */
+  :root{
+    --bg:#0b0e14; --surface:#121722; --surface2:#171e2c; --field:#0d1119;
+    --border:#212a3b; --border2:#2e3a52;
+    --text:#e8edf7; --muted:#8b95a7; --faint:#5d6778;
+    --accent:#2f81f7; --accent2:#1f6feb; --green:#26a69a; --red:#ef5350; --gold:#f5c542;
+    --r:8px; --rs:6px;
+    --shadow:0 12px 32px #000c, 0 2px 8px #0008;
+    --tr:.15s ease;
+  }
   *{box-sizing:border-box;margin:0;}
-  body{background:#0a0c10;color:#e6edf6;font:13px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;}
-  #bar{display:flex;align-items:center;gap:4px;height:34px;padding:0 8px;background:#0d1015;border-bottom:1px solid #1b2230;}
-  #barScroll{display:flex;align-items:center;gap:4px;flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;}
+  html,body{height:100%;}
+  body{background:var(--bg);color:var(--text);font:13px/1.35 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;overflow:hidden;-webkit-font-smoothing:antialiased;}
+  ::selection{background:#2f81f755;}
+  :focus{outline:none;}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:1px;border-radius:4px;}
+  /* thin dark scrollbars everywhere it scrolls */
+  .pop,#alList{scrollbar-width:thin;scrollbar-color:#2e3a52 transparent;}
+  .pop::-webkit-scrollbar,#alList::-webkit-scrollbar{width:6px;height:6px;}
+  .pop::-webkit-scrollbar-thumb,#alList::-webkit-scrollbar-thumb{background:#2e3a52;border-radius:3px;}
+  .pop::-webkit-scrollbar-track,#alList::-webkit-scrollbar-track{background:transparent;}
+
+  /* ---- top bar ---- */
+  #bar{display:flex;align-items:center;gap:6px;height:38px;padding:0 8px;background:linear-gradient(180deg,#11161f,#0d1119);border-bottom:1px solid var(--border);user-select:none;}
+  #barScroll{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;}
   #barScroll::-webkit-scrollbar{display:none;}
   #barScroll>*{flex:0 0 auto;}
-  #barActions{display:flex;align-items:center;gap:4px;flex:0 0 auto;}
-  #sym{background:#11151c;border:1px solid #1b2230;color:#e6edf6;border-radius:5px;padding:4px 7px;width:96px;font:inherit;text-transform:uppercase;}
-  .tf b{padding:4px 8px;color:#6b7689;cursor:pointer;border-radius:5px;}
-  .tf b.on{background:#1f6feb;color:#fff;}
-  .tools b{padding:4px 7px;color:#6b7689;cursor:pointer;border-radius:5px;font-size:14px;}
-  .tools b.on{background:#243044;color:#fff;}
-  #ovl{position:absolute;top:34px;left:0;right:0;bottom:0;pointer-events:none;z-index:5;}
-  #touch{position:absolute;top:34px;left:0;right:0;bottom:0;z-index:6;pointer-events:none;touch-action:none;}
-  .dot{width:7px;height:7px;border-radius:50%;background:#3a4658;margin:0 4px;}
-  .dot.live{background:#2ec27e;box-shadow:0 0 6px #2ec27e88;}
-  .ohlc{color:#6b7689;font-size:11px;margin-left:6px;}
-  .ohlc b{color:#e6edf6;}
+  #barActions{display:flex;align-items:center;gap:5px;flex:0 0 auto;padding-left:6px;border-left:1px solid var(--border);}
+  #sym{background:var(--surface);border:1px solid var(--border);color:var(--text);border-radius:var(--rs);padding:5px 7px;width:96px;font:inherit;font-weight:600;text-transform:uppercase;cursor:pointer;transition:border-color var(--tr);}
+  #sym:hover{border-color:var(--border2);}
+  .tf{display:inline-flex;gap:1px;background:var(--surface);border:1px solid var(--border);border-radius:var(--rs);padding:2px;}
+  .tf b{padding:3px 8px;color:var(--muted);cursor:pointer;border-radius:4px;font-weight:600;transition:color var(--tr),background var(--tr);}
+  .tf b:hover{color:var(--text);}
+  .tf b.on{background:var(--accent2);color:#fff;}
+  .tools{display:inline-flex;gap:1px;background:var(--surface);border:1px solid var(--border);border-radius:var(--rs);padding:2px;}
+  .tools b{padding:3px 7px;color:var(--muted);cursor:pointer;border-radius:4px;font-size:14px;transition:color var(--tr),background var(--tr);}
+  .tools b:hover{color:var(--text);background:var(--surface2);}
+  .tools b.on{background:#26334d;color:#fff;}
+  .dot{width:7px;height:7px;border-radius:50%;background:#3a4658;margin:0 4px;flex:0 0 auto;transition:background var(--tr);}
+  .dot.live{background:#2ec27e;box-shadow:0 0 8px #2ec27e99;}
+  .ohlc{color:var(--muted);font-size:11px;margin-left:4px;white-space:nowrap;}
+  .ohlc b{color:var(--text);}
   .sp{flex:1;}
-  .chip{display:inline-flex;align-items:center;gap:5px;background:#11151c;border:1px solid #1b2230;border-radius:5px;padding:3px 6px;cursor:pointer;font-size:11px;}
+
+  /* indicator chips */
+  .chip{display:inline-flex;align-items:center;gap:5px;background:var(--surface);border:1px solid var(--border);border-radius:var(--rs);padding:3px 7px;cursor:pointer;font-size:11px;transition:border-color var(--tr);}
+  .chip:hover{border-color:var(--border2);}
   .chip .sw{width:8px;height:8px;border-radius:2px;}
-  .chip .x{color:#6b7689;}
-  .chip .x:hover{color:#ef5350;}
+  .chip .x{color:var(--muted);transition:color var(--tr);}
+  .chip .x:hover{color:var(--red);}
   .chip.off{opacity:.4;}
-  .add{background:#11151c;border:1px solid #1b2230;color:#9aa6b8;border-radius:5px;padding:3px 8px;cursor:pointer;font-size:13px;}
-  .add:hover{border-color:#2c3a52;color:#e6edf6;}
-  #obBtn.on{background:#1f6feb;border-color:#1f6feb;color:#fff;}
-  #chart{position:absolute;top:34px;left:0;right:0;bottom:0;}
-  /* popovers */
-  .pop{position:absolute;z-index:30;background:#0f131a;border:1px solid #232d3e;border-radius:8px;padding:10px;display:none;box-shadow:0 8px 24px #000a;}
-  .pop.on{display:block;}
-  .pop label{display:block;color:#6b7689;font-size:10px;margin:6px 0 3px;}
-  .pop select,.pop input{background:#0a0c10;border:1px solid #1b2230;color:#e6edf6;border-radius:5px;padding:5px;font:inherit;width:100%;}
-  .pop .pp{display:flex;gap:6px;}
+
+  /* action buttons */
+  .add{display:inline-flex;align-items:center;justify-content:center;gap:5px;background:var(--surface);border:1px solid var(--border);color:#aeb8c9;border-radius:var(--rs);padding:5px 9px;cursor:pointer;font:inherit;font-size:13px;transition:border-color var(--tr),color var(--tr),background var(--tr),transform .06s ease;}
+  .add:hover{border-color:var(--border2);color:var(--text);background:var(--surface2);}
+  .add:active{transform:translateY(1px);}
+  .add .lbl{font-size:11.5px;font-weight:600;}
+  @media (max-width:980px){.add .lbl{display:none;}}
+  #obBtn.on{background:var(--accent2);border-color:var(--accent2);color:#fff;}
+  #alN{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;background:var(--accent2);color:#fff;border-radius:8px;font-size:10px;font-weight:700;}
+  #alN:empty{display:none;}
+
+  #chart{position:absolute;top:38px;left:0;right:0;bottom:0;}
+  #ovl{position:absolute;top:38px;left:0;right:0;bottom:0;pointer-events:none;z-index:5;}
+  #touch{position:absolute;top:38px;left:0;right:0;bottom:0;z-index:6;pointer-events:none;touch-action:none;}
+
+  /* ---- popovers ---- */
+  .pop{position:absolute;z-index:30;background:linear-gradient(180deg,#141a26,#10151f);border:1px solid var(--border2);border-radius:12px;padding:12px;display:none;box-shadow:var(--shadow);}
+  .pop.on{display:block;animation:popin .14s ease;}
+  @keyframes popin{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:none;}}
+  .ph{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:-2px 0 9px;padding-bottom:8px;border-bottom:1px solid var(--border);font-size:13px;}
+  .ph b{color:var(--text);}
+  .cx{cursor:pointer;color:var(--muted);font-size:15px;line-height:1;padding:3px 6px;border-radius:5px;transition:color var(--tr),background var(--tr);flex:0 0 auto;}
+  .cx:hover{color:var(--red);background:#ef535018;}
+  .pop label{display:block;color:#7d8798;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;margin:7px 0 3px;}
+  .pop select,.pop input{background:var(--field);border:1px solid var(--border);color:var(--text);border-radius:var(--rs);padding:6px;font:inherit;width:100%;transition:border-color var(--tr);}
+  .pop select:hover,.pop input:hover{border-color:var(--border2);}
+  .pop select:focus,.pop input:focus{border-color:var(--accent);}
+  .pop .pp{display:flex;gap:7px;}
   .pop .pp>div{flex:1;}
-  .pop .go{margin-top:9px;width:100%;background:#1f6feb;border:0;color:#fff;border-radius:6px;padding:6px;cursor:pointer;font:inherit;}
-  /* alerts panel */
-  #alerts{width:230px;right:8px;top:40px;}
-  #alList{max-height:calc(100vh - 240px);overflow-y:auto;}
-  #obPop{width:210px;right:8px;top:40px;}
-  #jrnPop{width:300px;right:8px;top:40px;max-height:80vh;overflow:auto;}
+  .pop .go{margin-top:10px;width:100%;background:var(--accent2);border:0;color:#fff;border-radius:7px;padding:8px;cursor:pointer;font:inherit;font-weight:700;transition:background var(--tr),transform .06s ease;}
+  .pop .go:hover{background:var(--accent);}
+  .pop .go:active{transform:translateY(1px);}
+  .btnrow{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px;}
+  .btnrow .add{width:100%;padding:7px 6px;font-size:12px;white-space:nowrap;}
+  .hint{margin:7px 0 4px;padding:6px 8px;background:#0d1119aa;border-radius:var(--rs);line-height:1.45;}
+
+  /* panel geometry */
+  #alerts{width:262px;right:8px;top:44px;}
+  #alList{max-height:calc(100vh - 300px);overflow-y:auto;margin-top:2px;}
+  #obPop{width:225px;right:8px;top:44px;}
+  #jrnPop{width:305px;right:8px;top:44px;max-height:82vh;overflow:auto;}
+  #confPop{width:330px;right:8px;top:44px;max-height:82vh;overflow:auto;}
   #confPop .ctf{flex:0 0 62px;}
-  #confPop{width:320px;right:8px;top:40px;max-height:80vh;overflow:auto;}
   #confPop .condrow{display:flex;gap:4px;align-items:center;margin-bottom:5px;}
-  #confPop .condrow select,#confPop .condrow input{padding:4px;font-size:12px;}
+  #confPop .condrow select,#confPop .condrow input{padding:5px 4px;font-size:12px;}
   #confPop .ctype{flex:0 0 92px;}
   #confPop .cfields{display:flex;gap:4px;flex:1;}
   #confPop .cfields input{width:56px;}
-  #confPop .cx{cursor:pointer;color:#6b7689;padding:0 2px;}
-  .lv{border-top:1px solid #1b2230;padding:7px 0;}
+  #confPop .cx{padding:2px 6px;}
+
+  /* alert rows */
+  .lv{border-top:1px solid var(--border);padding:8px 6px;margin:0 -6px;border-radius:var(--rs);transition:background var(--tr);}
+  .lv:hover{background:#151b28;}
   .lv:first-child{border-top:0;}
   .lv .t{display:flex;align-items:center;gap:6px;}
-  .lv .px{font-weight:700;flex:1;}
-  .lv .x{color:#6b7689;cursor:pointer;}
-  .lv .x:hover{color:#ef5350;}
-  .lv select,.lv input{background:#0a0c10;border:1px solid #1b2230;color:#e6edf6;border-radius:5px;padding:3px;font:inherit;font-size:11px;}
+  .lv .px{font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .lv .x{color:var(--muted);cursor:pointer;padding:2px 4px;border-radius:4px;transition:color var(--tr),background var(--tr);}
+  .lv .x:hover{color:var(--red);background:#ef535018;}
+  .lv select,.lv input{background:var(--field);border:1px solid var(--border);color:var(--text);border-radius:5px;padding:4px;font:inherit;font-size:11px;}
   .lv .r2{display:flex;gap:5px;margin-top:5px;align-items:center;}
   .lv .r2 select{flex:1 1 0;min-width:0;width:auto;}
   .lv .r2 label.mut{flex:0 0 auto;white-space:nowrap;}
   .lv input[type=text]{flex:1;}
-  .mut{color:#6b7689;font-size:11px;}
-  #toast{position:fixed;left:50%;bottom:54px;transform:translateX(-50%);background:#11151c;border:1px solid #2c3a52;color:#e6edf6;padding:8px 12px;border-radius:8px;font-size:12px;z-index:50;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90vw;text-align:center;}
-  #toast.on{opacity:1;}
-  button,.chip,.tf b,.tools b,.add{touch-action:manipulation;}
+  /* the arm-🔔 checkbox becomes a small switch */
+  .lv .t input[type=checkbox]{appearance:none;-webkit-appearance:none;width:28px;height:16px;border-radius:9px;background:#232c3d;border:1px solid var(--border2);position:relative;cursor:pointer;transition:background var(--tr);flex:0 0 auto;vertical-align:middle;}
+  .lv .t input[type=checkbox]::after{content:"";position:absolute;top:1.5px;left:2px;width:11px;height:11px;border-radius:50%;background:#8b95a7;transition:transform var(--tr),background var(--tr);}
+  .lv .t input[type=checkbox]:checked{background:var(--accent2);border-color:var(--accent2);}
+  .lv .t input[type=checkbox]:checked::after{transform:translateX(12px);background:#fff;}
+
+  .mut{color:var(--muted);font-size:11px;}
+  #toast{position:fixed;left:50%;bottom:56px;transform:translate(-50%,8px);background:#151b28f2;border:1px solid var(--border2);color:var(--text);padding:9px 14px;border-radius:10px;font-size:12px;z-index:50;opacity:0;transition:opacity .18s ease,transform .18s ease;pointer-events:none;max-width:92vw;text-align:center;box-shadow:var(--shadow);backdrop-filter:blur(6px);}
+  #toast.on{opacity:1;transform:translate(-50%,0);}
+  button,.chip,.tf b,.tools b,.add{touch-action:manipulation;user-select:none;}
+
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}}
+
   /* ---- mobile / touch ---- */
   @media (max-width:720px){
     body{font-size:14px;}
@@ -77,7 +143,7 @@
     #barScroll{gap:6px;-webkit-overflow-scrolling:touch;}
     .ohlc{display:none;}
     #sym{width:78px;padding:9px 8px;font-size:14px;}
-    .tf b,.tools b{padding:9px 11px;font-size:16px;}
+    .tf b,.tools b{padding:8px 11px;font-size:16px;}
     .chip{padding:7px 9px;font-size:13px;}
     .chip .x{padding:2px 6px;}
     .add{padding:8px 11px;font-size:16px;}
@@ -85,15 +151,21 @@
     #chart,#ovl,#touch{top:48px;}
     /* popovers become bottom sheets */
     .pop{left:0!important;right:0!important;top:auto!important;bottom:0!important;width:auto!important;
-         border-radius:14px 14px 0 0;max-height:64vh;overflow:auto;padding:16px 16px calc(16px + env(safe-area-inset-bottom));}
+         border-radius:16px 16px 0 0;max-height:66vh;overflow:auto;padding:14px 16px calc(16px + env(safe-area-inset-bottom));}
+    .pop.on{animation:sheetin .18s ease;}
+    @keyframes sheetin{from{opacity:.4;transform:translateY(24px);}to{opacity:1;transform:none;}}
     #alerts{width:auto;}
     #alList{max-height:none;}
     .pop select,.pop input{padding:11px;font-size:15px;}
-    .lv{padding:11px 0;}
+    .btnrow .add{padding:11px 8px;font-size:14px;}
+    .lv{padding:11px 6px;}
     .lv select,.lv input[type=text]{padding:10px;font-size:14px;}
     .lv .x{padding:6px 8px;}
     .lv label{padding:4px 0;}
-    .go{padding:12px!important;font-size:15px!important;}
+    .lv .t input[type=checkbox]{width:34px;height:20px;border-radius:11px;}
+    .lv .t input[type=checkbox]::after{width:14px;height:14px;top:2px;}
+    .lv .t input[type=checkbox]:checked::after{transform:translateX(14px);}
+    .go{padding:13px!important;font-size:15px!important;}
   }
 </style>
 </head>
@@ -108,12 +180,12 @@
     <span id="chips"></span>
   </div>
   <div id="barActions">
-    <button class="add" id="addBtn" title="add indicator (i)">+ƒ</button>
+    <button class="add" id="addBtn" title="add indicator (i)">+ƒ<span class="lbl">Indicator</span></button>
     <button class="add" id="clrM" title="clear measurement" style="display:none">✕📏</button>
-    <button class="add" id="opBtn" title="max pain & call/put walls (this week)">📌</button>
-    <button class="add" id="opHistBtn" title="daily option-level history (trend)">📈</button>
-    <button class="add" id="obBtn" title="order-book walls — heaviest combined buy/sell zones">📊</button>
-    <button class="add" id="alBtn" title="alerts">🔔<span id="alN"></span></button>
+    <button class="add" id="opBtn" title="max pain & call/put walls (this week)">📌<span class="lbl">Options</span></button>
+    <button class="add" id="opHistBtn" title="daily option-level history (trend)">📈<span class="lbl">History</span></button>
+    <button class="add" id="obBtn" title="order-book walls — heaviest combined buy/sell zones">📊<span class="lbl">Walls</span></button>
+    <button class="add" id="alBtn" title="alerts">🔔<span class="lbl">Alerts</span><span id="alN"></span></button>
   </div>
 </div>
 <div id="chart"></div>
@@ -122,6 +194,7 @@
 <div id="toast"></div>
 
 <div class="pop" id="indPop">
+  <div class="ph"><b>+ƒ Indicator</b><span class="cx" data-close="indPop">✕</span></div>
   <label>Indicator</label>
   <select id="pType"></select>
   <div id="pParams"></div>
@@ -130,20 +203,23 @@
 </div>
 
 <div class="pop" id="alerts">
+  <div class="ph"><b>🔔 Alerts</b><span class="cx" data-close="alerts">✕</span></div>
+  <div class="btnrow">
+    <button class="add" id="longBtn" title="one-tap LONG setup score alert for this coin">🟢 Long setup</button>
+    <button class="add" id="confBtn" title="build a custom indicator / confluence / score alert">🔗 New alert</button>
+    <button class="add" id="scanBtn" title="scan top coins by your filter">📋 Scan coins</button>
+    <button class="add" id="jrnBtn" title="fired signals + how they went">📒 Journal</button>
+  </div>
   <button class="add" id="muteBtn" style="width:100%;margin-bottom:6px"></button>
-  <button class="add" id="longBtn" style="width:100%;margin-bottom:6px">🟢 Long setup score (auto)</button>
-  <button class="add" id="planBtn" style="width:100%;margin-bottom:6px">⭐ Best long entry (plan + arm)</button>
-  <button class="add" id="scanBtn" style="width:100%;margin-bottom:6px">📋 Scan top coins now</button>
-  <button class="add" id="confBtn" style="width:100%;margin-bottom:6px">🔗 New indicator / confluence alert</button>
-  <button class="add" id="jrnBtn" style="width:100%;margin-bottom:6px">📒 Signal journal</button>
-  <button class="add" id="testBtn" style="width:100%;margin-bottom:6px">Send test Telegram alert</button>
-  <div id="testRes" class="mut" style="margin-bottom:8px"></div>
-  <div class="mut" style="margin-bottom:6px">─ tool adds a level · 🔔 toggles its alert · ✔on close = candle-close confirm</div>
+  <button class="add" id="testBtn" style="width:100%;margin-bottom:2px">✈️ Send test Telegram</button>
+  <div id="testRes" class="mut" style="margin-bottom:4px"></div>
+  <div class="mut hint">─ tool adds a level · switch arms its alert · "on close" = candle-close confirm</div>
   <div id="alList"></div>
 </div>
 
 <div class="pop" id="confPop">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px"><span style="font-weight:600">Indicator alert — ALL conditions, or switch to score mode (X of N points)</span><span class="cx" id="confX" style="cursor:pointer;font-size:16px;padding:0 4px;flex:0 0 auto">✕</span></div>
+  <div class="ph"><b>🔗 Custom alert</b><span class="cx" id="confX">✕</span></div>
+  <div class="mut" style="margin:-4px 0 8px">ALL conditions, or switch to score mode (X of N points)</div>
   <div class="pp"><div><label>Timeframe</label><select id="confTf"><option>5m</option><option>1h</option><option selected>4h</option><option value="1d">D</option></select></div>
   <div><label>Repeat</label><select id="confRepeat"><option value="always">every time</option><option value="once">1 time</option></select></div></div>
   <div class="pp" style="margin-top:6px"><div><label>Fire when</label><select id="confStyle"><option value="all">ALL conditions met</option><option value="score">score ≥ threshold</option></select></div>
@@ -157,15 +233,16 @@
 </div>
 
 <div class="pop" id="jrnPop">
-  <div style="display:flex;justify-content:space-between;align-items:center"><b>📒 Signal journal</b><span class="cx" id="jrnX" style="cursor:pointer;font-size:16px;padding:0 4px">✕</span></div>
-  <div id="jrnBody" class="mut" style="margin-top:8px;font-size:11px;line-height:1.5">…</div>
+  <div class="ph"><b>📒 Signal journal</b><span class="cx" id="jrnX">✕</span></div>
+  <div id="jrnBody" class="mut" style="font-size:11px;line-height:1.5">…</div>
 </div>
 
 <div class="pop" id="obPop">
+  <div class="ph"><b>📊 Order-book walls</b><span class="cx" data-close="obPop">✕</span></div>
   <div class="pp"><div><label>Zone width</label><select id="obAgg"><option value="4">Tight</option><option value="3" selected>Medium</option><option value="2">Wide</option></select></div>
   <div><label>Min wall $</label><input type="number" id="obMin" value="1000000" step="500000" min="0"></div></div>
   <div class="mut" style="margin-top:6px;font-size:10px">combined orders per price zone · 🟢 buy = longs · 🔴 sell = shorts</div>
-  <button class="go" id="obGo">Show walls</button>
+  <button class="go" id="obGo">Show walls (live)</button>
   <button class="add" id="obAlertGo" style="width:100%;margin-top:6px">🔔 Show + alert biggest walls</button>
 </div>
 
@@ -361,6 +438,9 @@ function renderAlerts(){
 /* These are created as real levels (note prefixed 📌) so they render on the
    chart AND show in the alerts panel where you can toggle 🔔 on each. */
 let _toastT;function toast(m){const t=document.getElementById("toast");t.textContent=m;t.classList.add("on");clearTimeout(_toastT);_toastT=setTimeout(()=>t.classList.remove("on"),4500);}
+/* one panel at a time; tap outside / Esc closes */
+function closePops(){document.querySelectorAll(".pop.on").forEach(p=>p.classList.remove("on"));}
+function openOnly(id){const p=document.getElementById(id);const was=p.classList.contains("on");closePops();if(!was)p.classList.add("on");return !was;}
 async function drawOptionLevels(){
   const existing=levels.filter(l=>l.coin===coin&&(l.note||"").startsWith("📌"));
   if(existing.length){for(const l of existing)await del(l.id);toast("option levels removed");return;}  // toggle off
@@ -436,7 +516,7 @@ function toggleOrderbookWalls(){
     toast("order-book walls off");
     return;
   }
-  document.getElementById("obPop").classList.toggle("on");
+  openOnly("obPop");
 }
 // 🔔 preset: save a snapshot as real levels, arming the single biggest wall each side.
 async function drawOrderbookWalls(minN,agg,arm){
@@ -462,7 +542,7 @@ async function drawOrderbookWalls(minN,agg,arm){
 }
 
 /* ---- wiring ---- */
-function setCoin(c){if(!c)return;clearHist();clearAllZones();clearPlan();coin=c;load_().then(()=>{chips();redraw();connect();if(obLive)obRefresh();document.getElementById("obBtn").classList.toggle("on",obActive());});}
+function setCoin(c){if(!c)return;clearHist();clearAllZones();coin=c;load_().then(()=>{chips();redraw();connect();if(obLive)obRefresh();document.getElementById("obBtn").classList.toggle("on",obActive());});}
 async function loadMarkets(){const sym=document.getElementById("sym");let list=null;try{const r=await fetch("/api/markets");const j=await r.json();if(Array.isArray(j)&&j.length)list=j;}catch(e){}
   if(!list)list=Object.entries(COINS).map(([k,v])=>({coin:v,sym:k,vol:0}));
   sym.innerHTML=list.map(m=>`<option value="${m.coin}"${m.coin===coin?" selected":""}>${m.sym}</option>`).join("");}
@@ -516,27 +596,55 @@ async function createLongPreset(){
   levels.push(l);renderAlerts();
   toast(`🟢 LONG setup armed on ${coin.split(":").pop()} — Telegram at ≥5/6 (4h close). Tap ✎ in 🔔 to customize.`);
 }
-/* 📋 on-demand market scan: clean-core checklist across the top-volume coins,
-   shown in the journal panel. The server also Telegrams this daily. */
-async function runScan(){
-  document.getElementById("alerts").classList.remove("on");
+/* 📋 market scan with a user-picked filter: long-score, uptrend, downtrend,
+   no-trend (chop), or all trend states — on the timeframe you choose.
+   (The daily Telegram digest keeps using the long-score mode.) */
+function runScan(){
+  closePops();
   const p=document.getElementById("jrnPop");p.classList.add("on");
-  const b=document.getElementById("jrnBody");b.textContent="scanning top 12 coins… (~15s)";
+  let prev={};try{prev=JSON.parse(localStorage.scanPrefs||"{}");}catch(e){}
+  document.getElementById("jrnBody").innerHTML=`<b style='color:#e6edf6'>📋 Scan top coins</b>
+  <div class="pp" style="margin-top:6px"><div><label>Filter</label><select id="scanMode">
+    <option value="score">long setup score</option>
+    <option value="up">uptrend</option>
+    <option value="down">downtrend</option>
+    <option value="notrend">no-trend (chop)</option>
+    <option value="trend">all trend states</option></select></div>
+  <div><label>Timeframe</label><select id="scanTf"><option>1h</option><option selected>4h</option><option value="1d">D</option></select></div></div>
+  <div class="pp" style="margin-top:6px"><div><label>Coins (by volume)</label><select id="scanN"><option>12</option><option>20</option></select></div>
+  <div style="display:flex;align-items:flex-end"><button class="go" id="scanGo" style="margin:0">Scan</button></div></div>
+  <div class="mut" style="font-size:10px;margin-top:4px">trend = your trend-vs-EMA50 logic (70% of last 50 closes) on closed candles</div>
+  <div id="scanOut" style="margin-top:8px"></div>`;
+  if(prev.mode)document.getElementById("scanMode").value=prev.mode;
+  if(prev.tf)document.getElementById("scanTf").value=prev.tf;
+  if(prev.n)document.getElementById("scanN").value=prev.n;
+  document.getElementById("scanGo").onclick=execScan;
+}
+async function execScan(){
+  const mode=document.getElementById("scanMode").value,tf=document.getElementById("scanTf").value,n=document.getElementById("scanN").value;
+  try{localStorage.scanPrefs=JSON.stringify({mode,tf,n});}catch(e){}
+  const out=document.getElementById("scanOut");
+  out.innerHTML=`<span class="mut">scanning ${n} coins… (~${Math.round(n*1.2)}s)</span>`;
   try{
-    const d=await(await fetch("/api/scan?n=12")).json();
-    if(d.error){b.textContent=d.error;return;}
+    const d=await(await fetch(`/api/scan?mode=${mode}&tf=${tf}&n=${n}`)).json();
+    if(d.error){out.textContent=d.error;return;}
     const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;");
-    let h="<b style='color:#e6edf6'>📋 LONG scan — top 12 by volume</b><div class='mut' style='font-size:10px;margin:2px 0 6px'>score = clean-core checklist (trend·EMA200·VWAP·volume·RSI·funding) · a daily digest also goes to Telegram</div>";
-    for(const r of (d.results||[])){
-      const ic=r.score>=5?"🟢":r.score>=4?"🟡":"⚪";
-      h+=`<div style="margin:4px 0">${ic} <b>${esc(r.coin.split(":").pop())}</b> ${r.score}/6 @ ${r.px}${(r.misses||[]).length&&r.score>=3?`<br><span class="mut" style="font-size:10px">needs: ${esc(r.misses.join(", "))}</span>`:""}</div>`;
+    const rs=d.results||[];let h="";
+    if(mode==="score"){
+      for(const r of rs){const ic=r.score>=5?"🟢":r.score>=4?"🟡":"⚪";
+        h+=`<div style="margin:4px 0">${ic} <b>${esc(r.coin.split(":").pop())}</b> ${r.score}/6 @ ${r.px}${(r.misses||[]).length&&r.score>=3?`<br><span class="mut" style="font-size:10px">needs: ${esc(r.misses.join(", "))}</span>`:""}</div>`;}
+      if(!rs.length)h='<span class="mut">no data</span>';
+    }else{
+      const ic=s=>s==="up"?"🟢⬆":s==="down"?"🔴⬇":"⚪➡";
+      const nm=s=>s==="none"?"no-trend (chop)":s+"trend";
+      for(const r of rs)h+=`<div style="margin:4px 0">${ic(r.state)} <b>${esc(r.coin.split(":").pop())}</b> @ ${r.px}<br><span class="mut" style="font-size:10px">${nm(r.state)} on ${d.tf} · ${r.vs_ema>0?"+":""}${r.vs_ema}% vs EMA50</span></div>`;
+      if(!rs.length)h=`<span class="mut">no coins match "${mode==="notrend"?"no-trend":mode+"trend"}" on ${d.tf} right now — try another timeframe</span>`;
     }
-    if(!(d.results||[]).length)h+="<div class='mut'>no data</div>";
-    b.innerHTML=h;
-  }catch(e){b.textContent="scan failed";}
+    out.innerHTML=h;
+  }catch(e){out.textContent="scan failed";}
 }
 async function openJournal(){
-  document.getElementById("alerts").classList.remove("on");
+  closePops();
   const p=document.getElementById("jrnPop");p.classList.add("on");
   const b=document.getElementById("jrnBody");b.textContent="loading…";
   try{
@@ -582,43 +690,14 @@ async function toggleZone(id){
                             :`price conditions don't overlap right now${st?" · "+st:""}`);
   }catch(e){toast("couldn't compute entry zone");}
 }
-/* ⭐ best long entry: server clusters support levels (EMA200/EMA50d/VWAPs/
-   swing lows + put wall/buy wall as weak evidence), picks the strongest
-   realistic cluster. We draw the entry line + each member level as a labeled
-   explanation, then ARM a real alert at that price — when it's hit, the
-   journal records the market state and tracks drawdown/uprise for 24h. */
-let planState=null;
-function clearPlan(){if(planState){planState.lines.forEach(pl=>{try{cs.removePriceLine(pl);}catch(e){}});planState=null;}}
-async function bestLongPlan(){
-  if(planState){clearPlan();toast("long plan hidden (alert stays armed — delete it in 🔔 if unwanted)");return;}
-  toast("computing best long entry…");
-  try{
-    const d=await(await fetch(`/api/longplan?coin=${encodeURIComponent(coin)}`)).json();
-    if(d.error){toast(d.error);return;}
-    const lines=[];
-    const mk=(p,t,c,big)=>{if(p==null)return;lines.push(cs.createPriceLine({price:p,color:c,lineWidth:big?2:1,lineStyle:big?LC.LineStyle.Solid:LC.LineStyle.Dotted,axisLabelVisible:true,title:t}));};
-    for(const m of d.members)mk(m.price,`${m.w>=3?"🟩":m.w===2?"🟨":"⬜"} ${m.label}`,m.w>=3?"#26a69a":m.w===2?"#8b96a8":"#5c6675");
-    for(const o of (d.overhead||[]))mk(o.price,`⛔ ${o.label}`,"#ef5350");
-    mk(d.entry,`⭐ LONG entry (${d.mode})`,"#f5c542",true);
-    planState={lines};
-    // arm the entry as a real level alert (replace any previous ⭐ for this coin)
-    for(const l of levels.filter(x=>x.coin===coin&&(x.note||"").startsWith("⭐")))await del(l.id);
-    const reason=d.members.slice(0,3).map(m=>m.label.split(" — ")[0]).join(" + ");
-    const dir=d.entry<=d.spot?"down":"up";
-    const l=await(await fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coin,price:d.entry,direction:dir,alert_enabled:true,note:`⭐ LONG plan: ${reason}`,color:"#f5c542"})})).json();
-    levels.push(l);draw(l);renderAlerts();
-    const oh=(d.overhead||[])[0];
-    toast(`⭐ entry ≈ ${d.entry} (${d.mode}, spot ${d.spot}) — armed & journaled on hit. Why: ${reason}${oh?` · ⛔ ceiling: ${oh.label.split(" — ")[0]} @ ${oh.price}`:""}`);
-  }catch(e){toast("couldn't compute long plan");}
-}
 let confEditId=null;
-function openConf(){confEditId=null;document.getElementById("alerts").classList.remove("on");const box=document.getElementById("confRows");box.innerHTML="";box.appendChild(condRow());document.getElementById("confErr").textContent="";document.getElementById("confStyle").value="all";document.getElementById("confThr").value=8;document.getElementById("confNote").value="";document.getElementById("confSave").textContent="Create alert";document.getElementById("confPop").classList.add("on");}
+function openConf(){confEditId=null;closePops();const box=document.getElementById("confRows");box.innerHTML="";box.appendChild(condRow());document.getElementById("confErr").textContent="";document.getElementById("confStyle").value="all";document.getElementById("confThr").value=8;document.getElementById("confNote").value="";document.getElementById("confSave").textContent="Create alert";document.getElementById("confPop").classList.add("on");}
 /* ✎ on a 🔗/🎯 row: reopen the editor pre-filled with that alert's conditions,
    threshold, style, timeframes and note — Save updates it in place. */
 function editAlert(id){
   const l=levels.find(x=>x.id===id);if(!l)return;
   confEditId=id;
-  document.getElementById("alerts").classList.remove("on");
+  closePops();
   document.getElementById("confTf").value=l.timeframe||"4h";
   document.getElementById("confRepeat").value=l.repeat||"always";
   document.getElementById("confClose").checked=l.confirm==="close";
@@ -648,10 +727,13 @@ function init(){mkChart();fillTypes();chips();
   document.querySelectorAll("#tf b").forEach(b=>b.onclick=()=>setTF(b.dataset.i));
   document.querySelectorAll("#tools b").forEach(b=>b.onclick=()=>setTool(b.dataset.t));
   const tEl=document.getElementById("touch");tEl.addEventListener("touchstart",onTStart,{passive:false});tEl.addEventListener("touchmove",onTMove,{passive:false});tEl.addEventListener("touchend",onTEnd,{passive:false});tEl.addEventListener("touchcancel",onTEnd,{passive:false});
-  document.getElementById("addBtn").onclick=e=>{const p=document.getElementById("indPop");p.classList.contains("on")?closePop():openPop(null,e.target);};
+  document.getElementById("addBtn").onclick=e=>{const p=document.getElementById("indPop");if(p.classList.contains("on")){closePop();}else{closePops();openPop(null,e.target);}};
   document.getElementById("pType").onchange=e=>{params(e.target.value,null);if(!editId&&defColors[e.target.value])document.getElementById("pColor").value=defColors[e.target.value];};
   document.getElementById("pGo").onclick=goPop;
-  document.getElementById("alBtn").onclick=()=>document.getElementById("alerts").classList.toggle("on");
+  document.getElementById("alBtn").onclick=()=>openOnly("alerts");
+  document.querySelectorAll("[data-close]").forEach(x=>x.onclick=()=>document.getElementById(x.dataset.close).classList.remove("on"));
+  document.addEventListener("pointerdown",e=>{if(!e.target.closest(".pop")&&!e.target.closest("#barActions"))closePops();});
+  document.addEventListener("keydown",e=>{if(e.key==="Escape")closePops();});
   document.getElementById("clrM").onclick=clearMeasure;
   document.getElementById("opBtn").onclick=drawOptionLevels;
   document.getElementById("opHistBtn").onclick=toggleHistory;
@@ -662,7 +744,6 @@ function init(){mkChart();fillTypes();chips();
   document.getElementById("muteBtn").onclick=toggleMute;
   document.getElementById("confBtn").onclick=openConf;
   document.getElementById("longBtn").onclick=createLongPreset;
-  document.getElementById("planBtn").onclick=bestLongPlan;
   document.getElementById("scanBtn").onclick=runScan;
   document.getElementById("jrnBtn").onclick=openJournal;
   document.getElementById("jrnX").onclick=()=>document.getElementById("jrnPop").classList.remove("on");
