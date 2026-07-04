@@ -32,7 +32,9 @@
   .pop::-webkit-scrollbar-track,#alList::-webkit-scrollbar-track{background:transparent;}
 
   /* ---- top bar ---- */
-  #bar{display:flex;align-items:center;gap:6px;height:38px;padding:0 8px;background:linear-gradient(180deg,#11161f,#0d1119);border-bottom:1px solid var(--border);user-select:none;}
+  #bar{position:relative;display:flex;align-items:center;gap:6px;height:38px;padding:0 8px;background:linear-gradient(180deg,#11161f,#0d1119);border-bottom:1px solid var(--border);user-select:none;}
+  /* fade hint when more chips/tools are hidden to the right (scroll to see) */
+  #bar.more::after{content:"";position:absolute;top:0;bottom:0;right:var(--actw,120px);width:30px;pointer-events:none;z-index:2;background:linear-gradient(90deg,rgba(13,17,25,0),rgba(13,17,25,.96));}
   #barScroll{display:flex;align-items:center;gap:6px;flex:1 1 auto;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;}
   #barScroll::-webkit-scrollbar{display:none;}
   #barScroll>*{flex:0 0 auto;}
@@ -51,6 +53,7 @@
   .dot.live{background:#2ec27e;box-shadow:0 0 8px #2ec27e99;}
   .ohlc{color:var(--muted);font-size:11px;margin-left:4px;white-space:nowrap;}
   .ohlc b{color:var(--text);}
+  @media (max-width:1080px){.ohlc{display:none;}} /* free the strip for chips */
   .sp{flex:1;}
 
   /* indicator chips */
@@ -734,6 +737,15 @@ function init(){mkChart();fillTypes();chips();
   document.querySelectorAll("[data-close]").forEach(x=>x.onclick=()=>document.getElementById(x.dataset.close).classList.remove("on"));
   document.addEventListener("pointerdown",e=>{if(!e.target.closest(".pop")&&!e.target.closest("#barActions"))closePops();});
   document.addEventListener("keydown",e=>{if(e.key==="Escape")closePops();});
+  // toolbar strip: mouse-wheel scrolls it, and a fade appears while more
+  // chips/tools are hidden to the right
+  const bs=document.getElementById("barScroll"),barEl=document.getElementById("bar");
+  bs.addEventListener("wheel",e=>{if(Math.abs(e.deltaY)>Math.abs(e.deltaX)){bs.scrollLeft+=e.deltaY;e.preventDefault();}},{passive:false});
+  const updFade=()=>{barEl.style.setProperty("--actw",(document.getElementById("barActions").offsetWidth+10)+"px");barEl.classList.toggle("more",bs.scrollWidth-bs.clientWidth-bs.scrollLeft>4);};
+  bs.addEventListener("scroll",updFade,{passive:true});
+  new ResizeObserver(updFade).observe(bs);
+  new ResizeObserver(updFade).observe(document.getElementById("chips"));
+  updFade();
   document.getElementById("clrM").onclick=clearMeasure;
   document.getElementById("opBtn").onclick=drawOptionLevels;
   document.getElementById("opHistBtn").onclick=toggleHistory;
