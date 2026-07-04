@@ -70,7 +70,8 @@
   .add:active{transform:translateY(1px);}
   .add .lbl{font-size:11.5px;font-weight:600;}
   @media (max-width:980px){.add .lbl{display:none;}}
-  #obBtn.on{background:var(--accent2);border-color:var(--accent2);color:#fff;}
+  #obBtn.on,#ftBtn.on,#whBtn.on{background:var(--accent2);border-color:var(--accent2);color:#fff;}
+  #ftPop{width:225px;right:8px;top:44px;}
   #alN{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;background:var(--accent2);color:#fff;border-radius:8px;font-size:10px;font-weight:700;}
   #alN:empty{display:none;}
 
@@ -187,7 +188,9 @@
     <button class="add" id="clrM" title="clear measurement" style="display:none">✕📏</button>
     <button class="add" id="opBtn" title="max pain & call/put walls (this week)">📌<span class="lbl">Options</span></button>
     <button class="add" id="opHistBtn" title="daily option-level history (trend)">📈<span class="lbl">History</span></button>
-    <button class="add" id="obBtn" title="order-book walls — heaviest combined buy/sell zones">📊<span class="lbl">Walls</span></button>
+    <button class="add" id="obBtn" title="order-book walls — heaviest combined buy/sell zones (resting orders)">📊<span class="lbl">Walls</span></button>
+    <button class="add" id="ftBtn" title="filled orders — where recent trades actually executed">⚡<span class="lbl">Fills</span></button>
+    <button class="add" id="whBtn" title="whale entries — big recorded fills marked where they happened">🐋<span class="lbl">Whales</span></button>
     <button class="add" id="alBtn" title="alerts">🔔<span class="lbl">Alerts</span><span id="alN"></span></button>
   </div>
 </div>
@@ -249,6 +252,14 @@
   <button class="add" id="obAlertGo" style="width:100%;margin-top:6px">🔔 Show + alert biggest walls</button>
 </div>
 
+<div class="pop" id="ftPop">
+  <div class="ph"><b>⚡ Filled orders</b><span class="cx" data-close="ftPop">✕</span></div>
+  <div class="pp"><div><label>Zone width</label><select id="ftAgg"><option value="4">Tight</option><option value="3" selected>Medium</option><option value="2">Wide</option></select></div>
+  <div><label>Min zone $</label><input type="number" id="ftMin" value="50000" step="25000" min="0"></div></div>
+  <div class="mut" style="margin-top:6px;font-size:10px">where trades EXECUTED · 🟢 buys · 🔴 sells · keeps accumulating while on (up to 4h) — leave it running to build the picture</div>
+  <button class="go" id="ftGo">Show fills (live)</button>
+</div>
+
 <script>
 const COINS={"AAPL":"xyz:AAPL","AMD":"xyz:AMD","AMZN":"xyz:AMZN","ARM":"xyz:ARM","ASML":"xyz:ASML","AVGO":"xyz:AVGO","BABA":"xyz:BABA","BB":"xyz:BB","BE":"xyz:BE","BIRD":"xyz:BIRD","BRENTOIL":"xyz:BRENTOIL","BX":"xyz:BX","CBRS":"xyz:CBRS","CL":"xyz:CL","COIN":"xyz:COIN","COPPER":"xyz:COPPER","COST":"xyz:COST","CRCL":"xyz:CRCL","CRWV":"xyz:CRWV","DELL":"xyz:DELL","DKNG":"xyz:DKNG","DRAM":"xyz:DRAM","EBAY":"xyz:EBAY","EUR":"xyz:EUR","EWJ":"xyz:EWJ","EWT":"xyz:EWT","EWY":"xyz:EWY","EWZ":"xyz:EWZ","GBP":"xyz:GBP","GME":"xyz:GME","GOLD":"xyz:GOLD","GOOGL":"xyz:GOOGL","HIMS":"xyz:HIMS","HOOD":"xyz:HOOD","HYUNDAI":"xyz:HYUNDAI","IBM":"xyz:IBM","INTC":"xyz:INTC","JP225":"xyz:JP225","JPY":"xyz:JPY","KR200":"xyz:KR200","LITE":"xyz:LITE","LLY":"xyz:LLY","META":"xyz:META","MINIMAX":"xyz:MINIMAX","MRVL":"xyz:MRVL","MSFT":"xyz:MSFT","MSTR":"xyz:MSTR","MU":"xyz:MU","NATGAS":"xyz:NATGAS","NBIS":"xyz:NBIS","NFLX":"xyz:NFLX","NOK":"xyz:NOK","NOW":"xyz:NOW","NVDA":"xyz:NVDA","ORCL":"xyz:ORCL","PALLADIUM":"xyz:PALLADIUM","PLATINUM":"xyz:PLATINUM","PLTR":"xyz:PLTR","PURRDAT":"xyz:PURRDAT","QCOM":"xyz:QCOM","QNT":"xyz:QNT","RIVN":"xyz:RIVN","RKLB":"xyz:RKLB","SILVER":"xyz:SILVER","SKHX":"xyz:SKHX","SKHYNIX":"xyz:SKHX","SMH":"xyz:SMH","SMSN":"xyz:SMSN","SNDK":"xyz:SNDK","SP500":"xyz:SP500","SPCX":"xyz:SPCX","STRC":"xyz:STRC","TSLA":"xyz:TSLA","TSM":"xyz:TSM","URNM":"xyz:URNM","USAR":"xyz:USAR","WDC":"xyz:WDC","XLE":"xyz:XLE","XYZ100":"xyz:XYZ100","ZHIPU":"xyz:ZHIPU","ZM":"xyz:ZM"};
 const ITYPES={
@@ -306,7 +317,36 @@ function trendCompute(ind){const len=ind.params.len||50,lb=ind.params.lookback||
     if(id&&!pd)markers.push({time:bars[i].time,position:"aboveBar",shape:"arrowDown",color:"#ef5350"});
     pu=iu;pd=id;}
   ind._trend={up,dn,markers};}
-function applyMarkers(){const ms=[];inds.filter(i=>i.type==="trend50"&&shown(i)&&i._trend).forEach(i=>i._trend.markers.forEach(m=>ms.push(m)));ms.sort((x,y)=>x.time-y.time);try{cs.setMarkers(ms);}catch(e){}}
+function applyMarkers(){const ms=[];inds.filter(i=>i.type==="trend50"&&shown(i)&&i._trend).forEach(i=>i._trend.markers.forEach(m=>ms.push(m)));
+  if(whaleOn&&whaleFills.length){const sec={"5m":300,"1h":3600,"4h":14400,"1d":86400}[interval]||14400;
+    const money=n=>n>=1e6?"$"+(n/1e6).toFixed(1)+"M":"$"+Math.round(n/1e3)+"k";
+    whaleFills.forEach(f=>ms.push({time:Math.floor(f.t/1000/sec)*sec,position:f.side==="B"?"belowBar":"aboveBar",color:f.side==="B"?"#26a69a":"#ef5350",shape:f.side==="B"?"arrowUp":"arrowDown",text:money(f.ntl)}));}
+  ms.sort((x,y)=>x.time-y.time);try{cs.setMarkers(ms);}catch(e){}}
+/* ---- 🐋 whale entries: big recorded fills as points on the chart ---- */
+let whaleOn=false,whaleFills=[],whaleTimer=null;
+async function whaleRefresh(){
+  try{
+    const d=await(await fetch(`/api/whales?coin=${encodeURIComponent(coin)}`)).json();
+    whaleFills=d.fills||[];applyMarkers();return d;
+  }catch(e){return null;}
+}
+function whaleStop(){whaleOn=false;whaleFills=[];clearInterval(whaleTimer);whaleTimer=null;document.getElementById("whBtn").classList.remove("on");applyMarkers();}
+async function toggleWhales(){
+  if(whaleOn){whaleStop();toast("whale entries hidden");return;}
+  whaleOn=true;document.getElementById("whBtn").classList.add("on");
+  toast("loading whale entries…");
+  const d=await whaleRefresh();
+  if(!d){whaleStop();toast("couldn't load whale entries");return;}
+  const money=n=>n>=1e6?"$"+(n/1e6).toFixed(1)+"M":"$"+Math.round(n/1e3)+"k";
+  if(!whaleFills.length){
+    toast(d.watched?`no fills ≥ ${money(d.min_usd)} recorded yet on ${coin.split(":").pop()} — recording 24/7, history builds from deploy day`
+                   :`${coin.split(":").pop()} isn't in the whale watchlist (set WHALE_WATCH env var)`);
+  }else{
+    const since=new Date(whaleFills[0].t);
+    toast(`🐋 ${whaleFills.length} fills ≥ ${money(d.min_usd)} since ${since.toLocaleDateString()} · ▲ buys ▼ sells · updates live`);
+  }
+  whaleTimer=setInterval(whaleRefresh,60000);  // pick up new whales while on
+}
 
 /* ── ICS Trend Channel (ST-EP06 core, reconstructed) ── */
 function yzSigma(b,n){const m=b.length;if(m<n+1)n=m-1;if(n<2)return 1e-10;const OR=[],CO=[],RS=[];for(let i=m-n;i<m;i++){const o=b[i].open,h=b[i].high,l=b[i].low,c=b[i].close,pc=b[i-1].close;if(Math.min(o,h,l,c,pc)<=0)continue;OR.push(Math.log(o/pc));CO.push(Math.log(c/o));RS.push(Math.log(h/o)*Math.log(h/c)+Math.log(l/o)*Math.log(l/c));}if(OR.length<2)return 1e-10;const mean=a=>a.reduce((s,x)=>s+x,0)/a.length,vr=a=>{const mu=mean(a);return mean(a.map(x=>(x-mu)**2));};const k=0.34/(1.34+(n+1)/Math.max(n-1,1)),sq=vr(OR)+k*vr(CO)+(1-k)*mean(RS);return Math.max(Math.sqrt(Math.max(sq,0)),1e-10);}
@@ -512,6 +552,42 @@ async function obStartLive(min,agg){
   toast(obLive.lines.length?`📊 live walls ON — updating every ${OB_REFRESH_MS/1000}s · tap 📊 to turn off`
                            :"📊 live ON but no walls that big yet — lower Min wall $ or widen the zone");
 }
+/* ---- ⚡ filled orders (where trades actually executed) ---- */
+/* Twin of the 📊 walls live view, but for EXECUTED trades: recentTrades
+   aggregated into price zones. Client-side lines only, refreshed until the
+   ⚡ button is toggled off. */
+let ftLive=null;
+function ftStop(){if(ftLive){clearInterval(ftLive.timer);ftLive.lines.forEach(pl=>{try{cs.removePriceLine(pl);}catch(e){}});ftLive=null;}document.getElementById("ftBtn").classList.remove("on");}
+async function ftRefresh(){
+  if(!ftLive)return;const s=ftLive;
+  try{
+    const d=await(await fetch(`/api/filledorders?coin=${encodeURIComponent(coin)}&min=${s.min}&agg=${s.agg}`)).json();
+    if(!ftLive||ftLive!==s||d.error)return;
+    s.meta=d;
+    const fresh=[];
+    const add=(z,t,c)=>fresh.push(cs.createPriceLine({price:z.px,color:c,lineWidth:1,lineStyle:LC.LineStyle.Dotted,axisLabelVisible:true,title:t}));
+    for(const b of (d.buys||[]))add(b,`⚡ Buys ${obMoney(b.notional)} · ${b.n} fills`,"#26a69a");
+    for(const a of (d.sells||[]))add(a,`⚡ Sells ${obMoney(a.notional)} · ${a.n} fills`,"#ef5350");
+    s.lines.forEach(pl=>{try{cs.removePriceLine(pl);}catch(e){}});  // swap = no flicker
+    s.lines=fresh;
+  }catch(e){}
+}
+async function ftStart(min,agg){
+  ftStop();
+  ftLive={lines:[],timer:null,min,agg,meta:null};
+  document.getElementById("ftBtn").classList.add("on");
+  await ftRefresh();
+  if(!ftLive)return;
+  ftLive.timer=setInterval(ftRefresh,5000);
+  const m=ftLive.meta;
+  if(m&&(ftLive.lines.length||m.trades)){
+    toast(`⚡ live fills ON — last ${m.span_min}min: buys ${obMoney(m.buy_total)} vs sells ${obMoney(m.sell_total)}${ftLive.lines.length?"":" · no zone ≥ your min $ — lower it"} · tap ⚡ to turn off`);
+  }else toast("no recent trades data — try again");
+}
+function toggleFills(){
+  if(ftLive){ftStop();toast("filled-orders view off");return;}
+  openOnly("ftPop");
+}
 function toggleOrderbookWalls(){
   if(obActive()){                                   // anything up (live view or armed snapshot) -> turn all off
     obStop();
@@ -545,7 +621,7 @@ async function drawOrderbookWalls(minN,agg,arm){
 }
 
 /* ---- wiring ---- */
-function setCoin(c){if(!c)return;clearHist();clearAllZones();coin=c;load_().then(()=>{chips();redraw();connect();if(obLive)obRefresh();document.getElementById("obBtn").classList.toggle("on",obActive());});}
+function setCoin(c){if(!c)return;clearHist();clearAllZones();coin=c;load_().then(()=>{chips();redraw();connect();if(obLive)obRefresh();if(ftLive)ftRefresh();if(whaleOn)whaleRefresh();else applyMarkers();document.getElementById("obBtn").classList.toggle("on",obActive());});}
 async function loadMarkets(){const sym=document.getElementById("sym");let list=null;try{const r=await fetch("/api/markets");const j=await r.json();if(Array.isArray(j)&&j.length)list=j;}catch(e){}
   if(!list)list=Object.entries(COINS).map(([k,v])=>({coin:v,sym:k,vol:0}));
   sym.innerHTML=list.map(m=>`<option value="${m.coin}"${m.coin===coin?" selected":""}>${m.sym}</option>`).join("");}
@@ -750,8 +826,11 @@ function init(){mkChart();fillTypes();chips();
   document.getElementById("opBtn").onclick=drawOptionLevels;
   document.getElementById("opHistBtn").onclick=toggleHistory;
   document.getElementById("obBtn").onclick=toggleOrderbookWalls;
-  const obParams=()=>({mn:Math.max(0,+document.getElementById("obMin").value||1000000),agg:+document.getElementById("obAgg").value||3});
+  const obParams=()=>{const v=parseFloat(document.getElementById("obMin").value);return {mn:isNaN(v)?1000000:Math.max(0,v),agg:+document.getElementById("obAgg").value||3};};
   document.getElementById("obGo").onclick=()=>{const{mn,agg}=obParams();document.getElementById("obPop").classList.remove("on");obStartLive(mn,agg);};
+  document.getElementById("ftBtn").onclick=toggleFills;
+  document.getElementById("whBtn").onclick=toggleWhales;
+  document.getElementById("ftGo").onclick=()=>{const v=parseFloat(document.getElementById("ftMin").value);const mn=isNaN(v)?50000:Math.max(0,v);const agg=+document.getElementById("ftAgg").value||3;document.getElementById("ftPop").classList.remove("on");ftStart(mn,agg);};
   document.getElementById("obAlertGo").onclick=()=>{const{mn,agg}=obParams();document.getElementById("obPop").classList.remove("on");drawOrderbookWalls(mn,agg,true);};
   document.getElementById("muteBtn").onclick=toggleMute;
   document.getElementById("confBtn").onclick=openConf;
@@ -767,7 +846,7 @@ function init(){mkChart();fillTypes();chips();
   document.addEventListener("keydown",e=>{if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT")return;const m={"1":"5m","2":"1h","3":"4h","4":"1d"};if(m[e.key])setTF(m[e.key]);const tk={t:"trend",r:"ray",e:"extended",m:"measure",f:"fib",a:"vwapanchor",h:"level",c:"cursor"};if(tk[e.key])setTool(tk[e.key]);if(e.key==="i")document.getElementById("addBtn").click();if(e.key==="Escape"){closePop();closeConf();clearMeasure();setTool("cursor");document.getElementById("alerts").classList.remove("on");}});
   document.addEventListener("click",e=>{const p=document.getElementById("indPop");if(p.classList.contains("on")&&!p.contains(e.target)&&e.target.id!=="addBtn"&&!e.target.closest(".chip"))closePop();});
   load_().then(loadIndicators).then(loadLevels).then(connect);}
-function setTF(i){interval=i;document.querySelectorAll("#tf b").forEach(x=>x.classList.toggle("on",x.dataset.i===i));load_().then(connect);}
+function setTF(i){interval=i;document.querySelectorAll("#tf b").forEach(x=>x.classList.toggle("on",x.dataset.i===i));load_().then(()=>{connect();applyMarkers();});}
 init();
 </script>
 </body>

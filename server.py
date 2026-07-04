@@ -15,7 +15,7 @@ Open: http://127.0.0.1:8000
 import asyncio, json, math, os, re, ssl, time
 import datetime as dt
 from pathlib import Path
-from aiohttp import web, ClientSession, TCPConnector, ClientTimeout
+from aiohttp import web, ClientSession, TCPConnector, ClientTimeout, WSMsgType
 
 
 def _ssl_context():
@@ -629,6 +629,169 @@ async def compute_orderbook_walls(session, coin, min_notional=1_000_000.0,
     mid = ((best_bid + best_ask) / 2) if (best_bid and best_ask) else (best_bid or best_ask)
     return {"coin": coin, "sym": coin.split(":")[-1], "mid": mid, "nSigFigs": n_sig,
             "bids": clean(bids_raw), "asks": clean(asks_raw)}
+
+
+def _round_sig(px, n_sig):
+    """Round a price to n_sig significant figures (mirrors l2Book zoning)."""
+    if not px or px <= 0:
+        return px
+    return round(px, int(n_sig) - 1 - math.floor(math.log10(abs(px))))
+
+
+# 🐋 WHALES: individual big fills recorded 24/7 from Hyperliquid's live trade
+# stream and kept on the persistent volume — so weeks/months of whale entries
+# accumulate from first deploy. (Old trades can't be backfilled from the free
+# API; recording forward is the honest way to build this history.)
+WHALE_MIN_USD = float(os.environ.get("WHALE_MIN_USD", "100000"))
+WHALE_WATCH = [s if ":" in s else f"xyz:{s}" for s in
+               os.environ.get("WHALE_WATCH", os.environ.get("OPT_WATCH", _DEFAULT_WATCH))
+               .replace(",", " ").split()]
+HL_WS = "wss://api.hyperliquid.xyz/ws"
+WHALES_FILE = STATE_DIR / "whales.json"
+WHALE_KEEP_PER_COIN = 800
+WHALE_KEEP_DAYS = 180
+
+
+def load_whales():
+    if WHALES_FILE.exists():
+        try:
+            d = json.loads(WHALES_FILE.read_text())
+            if isinstance(d, dict):
+                return d
+        except Exception:
+            pass
+    return {}
+
+
+WHALES = load_whales()
+
+
+def save_whales():
+    WHALES_FILE.write_text(json.dumps(WHALES))
+
+
+def record_whale(coin, px, sz, side, t):
+    lst = WHALES.setdefault(coin, [])
+    lst.append({"t": int(t), "px": px, "sz": sz, "side": side,
+                "ntl": round(px * sz, 2)})
+    cutoff = (time.time() - WHALE_KEEP_DAYS * 86400) * 1000
+    lst[:] = [w for w in lst if w["t"] >= cutoff][-WHALE_KEEP_PER_COIN:]
+    save_whales()  # rare events — a write per whale is fine
+
+
+async def whale_ws_loop(app):
+    """Subscribe to live trades for the watchlist; record fills >= WHALE_MIN_USD.
+    Reconnects forever on any failure."""
+    session = app["session"]
+    print(f"whale recorder: {len(WHALE_WATCH)} coins, min ${WHALE_MIN_USD:,.0f}")
+    while True:
+        try:
+            async with session.ws_connect(HL_WS, heartbeat=30) as ws:
+                for c in WHALE_WATCH:
+                    await ws.send_json({"method": "subscribe",
+                                        "subscription": {"type": "trades", "coin": c}})
+                async for msg in ws:
+                    if msg.type != WSMsgType.TEXT:
+                        break
+                    j = msg.json()
+                    if j.get("channel") != "trades":
+                        continue
+                    for t in j.get("data") or []:
+                        px, sz = _f(t.get("px")), _f(t.get("sz"))
+                        if px and sz and px * sz >= WHALE_MIN_USD:
+                            record_whale(t.get("coin"), px, sz,
+                                         t.get("side"), t.get("time") or 0)
+        except Exception as e:
+            print("whale ws error", e)
+        await asyncio.sleep(5)
+
+
+async def api_whales(request):
+    """🐋 Big fills recorded for a coin (points for the chart)."""
+    coin = request.query.get("coin", "")
+    fills = sorted(WHALES.get(coin, []), key=lambda w: w["t"])[-500:]
+    return web.json_response({"coin": coin, "min_usd": WHALE_MIN_USD,
+                              "watched": coin in WHALE_WATCH,
+                              "since": fills[0]["t"] if fills else None,
+                              "fills": fills})
+
+
+# recentTrades only returns a small recent slice (these markets trade in small
+# continuous clips), so we ACCUMULATE trades per coin in a rolling window —
+# each ⚡ refresh merges new trades, and the picture builds while you watch.
+_fills_buf = {}  # coin -> {trade_id: {"px","sz","side","t"}}
+FILLS_WINDOW_MS = 4 * 3600 * 1000
+FILLS_MAX = 8000
+
+
+async def compute_filled_zones(session, coin, min_notional=50000.0,
+                               n_sig=3, per_side=6):
+    """Where orders actually FILLED: recentTrades merged into a rolling 4h
+    buffer, aggregated into price zones. side B = aggressive buys (longs
+    filled), A = aggressive sells (shorts filled)."""
+    if not coin:
+        return {"error": "no coin"}
+    try:
+        async with session.post(HL_INFO, json={"type": "recentTrades", "coin": coin}) as r:
+            trades = await r.json()
+    except Exception as e:
+        trades = None  # keep serving from the buffer on a transient failure
+    buf = _fills_buf.setdefault(coin, {})
+    if isinstance(trades, list):
+        for t in trades:
+            px, sz = _f(t.get("px")), _f(t.get("sz"))
+            if px is None or sz is None or px <= 0 or sz <= 0:
+                continue
+            key = t.get("tid") or t.get("hash") or f"{t.get('time')}-{px}-{sz}-{t.get('side')}"
+            buf[key] = {"px": px, "sz": sz, "side": t.get("side"), "t": t.get("time") or 0}
+    now_ms = time.time() * 1000
+    for k in [k for k, v in buf.items() if now_ms - v["t"] > FILLS_WINDOW_MS]:
+        buf.pop(k)
+    if len(buf) > FILLS_MAX:  # keep the newest
+        for k, _v in sorted(buf.items(), key=lambda kv: kv[1]["t"])[:len(buf) - FILLS_MAX]:
+            buf.pop(k)
+    if not buf:
+        return {"error": f"No recent trades for {coin}."}
+
+    buys, sells = {}, {}
+    tmin = min(v["t"] for v in buf.values())
+    last = max(buf.values(), key=lambda v: v["t"])
+    for v in buf.values():
+        z = _round_sig(v["px"], n_sig)
+        d = buys if v["side"] == "B" else sells
+        e = d.setdefault(z, {"px": z, "notional": 0.0, "n": 0})
+        e["notional"] += v["px"] * v["sz"]
+        e["n"] += 1
+
+    def top(d):
+        out = [dict(v, notional=round(v["notional"], 2)) for v in d.values()
+               if v["notional"] >= min_notional]
+        out.sort(key=lambda x: -x["notional"])
+        return out[:per_side]
+
+    return {"coin": coin, "last_px": last["px"],
+            "span_min": round((now_ms - tmin) / 60000.0, 1),
+            "buy_total": round(sum(v["notional"] for v in buys.values()), 2),
+            "sell_total": round(sum(v["notional"] for v in sells.values()), 2),
+            "trades": len(buf),
+            "buys": top(buys), "sells": top(sells)}
+
+
+async def api_filled_orders(request):
+    """⚡ Live button: recent filled-order zones. Query: coin, min (combined $,
+    default 100k), agg (significant figures 2-5, default 3 like the walls)."""
+    coin = request.query.get("coin", "")
+    try:
+        min_n = max(0.0, float(request.query.get("min", 50000.0)))
+    except Exception:
+        min_n = 50000.0
+    try:
+        n_sig = int(float(request.query.get("agg", 3)))
+    except Exception:
+        n_sig = 3
+    n_sig = max(2, min(5, n_sig))
+    res = await compute_filled_zones(request.app["session"], coin, min_n, n_sig)
+    return web.json_response(res)
 
 
 async def api_orderbook_walls(request):
@@ -1760,12 +1923,14 @@ async def on_startup(app):
     app["alert_task"] = asyncio.create_task(alert_loop(app))
     app["opthist_task"] = asyncio.create_task(option_history_loop(app))
     app["scan_task"] = asyncio.create_task(daily_scan_loop(app))
+    app["whale_task"] = asyncio.create_task(whale_ws_loop(app))
 
 
 async def on_cleanup(app):
     app["alert_task"].cancel()
     app["opthist_task"].cancel()
     app["scan_task"].cancel()
+    app["whale_task"].cancel()
     await app["session"].close()
 
 
@@ -1789,6 +1954,8 @@ def make_app():
         web.get("/api/optionlevels", api_option_levels),
         web.get("/api/optionhistory", api_option_history),
         web.get("/api/orderbookwalls", api_orderbook_walls),
+        web.get("/api/filledorders", api_filled_orders),
+        web.get("/api/whales", api_whales),
         web.get("/api/journal", api_journal),
         web.get("/api/scorezone", api_score_zone),
         web.get("/api/scan", api_scan),
