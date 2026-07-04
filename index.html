@@ -143,8 +143,12 @@
   /* ---- mobile / touch ---- */
   @media (max-width:720px){
     body{font-size:14px;}
-    #bar{height:48px;gap:6px;}
-    #barScroll{gap:6px;-webkit-overflow-scrolling:touch;}
+    /* two rows: 1 = symbol/timeframes/tools/chips (swipeable), 2 = actions */
+    #bar{height:100px;flex-wrap:wrap;gap:4px 6px;padding:6px 8px;align-content:center;}
+    #barScroll{flex:1 1 100%;order:1;height:46px;gap:6px;-webkit-overflow-scrolling:touch;}
+    #barActions{flex:1 1 100%;order:2;height:40px;border-left:0;padding-left:0;justify-content:space-between;gap:4px;}
+    #barActions .add{flex:1 1 0;min-width:0;padding:8px 2px;font-size:16px;}
+    #bar.more::after{top:6px;height:46px;bottom:auto;right:8px;}
     .ohlc{display:none;}
     #sym{width:78px;padding:9px 8px;font-size:14px;}
     .tf b,.tools b{padding:8px 11px;font-size:16px;}
@@ -152,7 +156,7 @@
     .chip .x{padding:2px 6px;}
     .add{padding:8px 11px;font-size:16px;}
     .dot{margin:0 2px;}
-    #chart,#ovl,#touch{top:48px;}
+    #chart,#ovl,#touch{top:100px;}
     /* popovers become bottom sheets */
     .pop{left:0!important;right:0!important;top:auto!important;bottom:0!important;width:auto!important;
          border-radius:16px 16px 0 0;max-height:66vh;overflow:auto;padding:14px 16px calc(16px + env(safe-area-inset-bottom));}
