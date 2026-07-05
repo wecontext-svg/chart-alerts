@@ -643,9 +643,10 @@ def _round_sig(px, n_sig):
 # accumulate from first deploy. (Old trades can't be backfilled from the free
 # API; recording forward is the honest way to build this history.)
 WHALE_MIN_USD = float(os.environ.get("WHALE_MIN_USD", "25000"))  # recording floor
-WHALE_WATCH = [s if ":" in s else f"xyz:{s}" for s in
-               os.environ.get("WHALE_WATCH", os.environ.get("OPT_WATCH", _DEFAULT_WATCH))
-               .replace(",", " ").split()]
+# Default: watch EVERY live xyz coin (fetched at connect). WHALE_WATCH env
+# narrows it to a fixed list if you ever want to.
+WHALE_WATCH_ENV = os.environ.get("WHALE_WATCH", "").strip()
+_whale_watching = set()  # coins actually subscribed (filled at runtime)
 HL_WS = "wss://api.hyperliquid.xyz/ws"
 WHALES_FILE = STATE_DIR / "whales.json"
 WHALE_KEEP_PER_COIN = 800
@@ -702,19 +703,33 @@ def _maybe_whale_alert(coin, px, sz, side, ntl):
 
 
 async def whale_ws_loop(app):
-    """Subscribe to live trades for the watchlist; record fills >= WHALE_MIN_USD
-    and (optionally) Telegram-alert the ones >= the user's alert threshold.
-    Reconnects forever on any failure."""
+    """Subscribe to live trades (all xyz coins by default, or WHALE_WATCH env);
+    record fills >= WHALE_MIN_USD and (optionally) Telegram-alert the ones >=
+    the user's alert threshold. Reconnects forever; resubscribes every ~6h so
+    newly listed coins get picked up."""
     session = app["session"]
-    print(f"whale recorder: {len(WHALE_WATCH)} coins, min ${WHALE_MIN_USD:,.0f}")
     while True:
         try:
+            if WHALE_WATCH_ENV:
+                coins = [s if ":" in s else f"xyz:{s}"
+                         for s in WHALE_WATCH_ENV.replace(",", " ").split()]
+            else:
+                async with session.post(HL_INFO, json={"type": "meta", "dex": "xyz"}) as r:
+                    m = await r.json()
+                coins = [a["name"] for a in (m.get("universe") or [])
+                         if not a.get("isDelisted")]
+            _whale_watching.clear()
+            _whale_watching.update(coins)
+            print(f"whale recorder: {len(coins)} coins, floor ${WHALE_MIN_USD:,.0f}")
+            started = time.time()
             async with session.ws_connect(HL_WS, heartbeat=30) as ws:
-                for c in WHALE_WATCH:
+                for c in coins:
                     await ws.send_json({"method": "subscribe",
                                         "subscription": {"type": "trades", "coin": c}})
                 async for msg in ws:
                     if msg.type != WSMsgType.TEXT:
+                        break
+                    if time.time() - started > 21600:  # refresh coin list
                         break
                     j = msg.json()
                     if j.get("channel") != "trades":
@@ -739,8 +754,10 @@ async def api_whales(request):
         mn = 0.0
     fills = [w for w in sorted(WHALES.get(coin, []), key=lambda w: w["t"])
              if w["ntl"] >= mn][-500:]
+    # before the first WS connect the set is empty -> assume watched
+    watched = coin in _whale_watching or not _whale_watching
     return web.json_response({"coin": coin, "floor": WHALE_MIN_USD,
-                              "watched": coin in WHALE_WATCH,
+                              "watched": watched,
                               "since": fills[0]["t"] if fills else None,
                               "fills": fills})
 

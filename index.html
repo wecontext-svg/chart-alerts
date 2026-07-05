@@ -374,7 +374,7 @@ async function whaleStart(min){
   if(!d){whaleStop();toast("couldn't load whale entries");return;}
   if(!whaleFills.length){
     let msg=d.watched?`no fills ≥ ${obMoney(whaleMin)} recorded yet on ${coin.split(":").pop()}`
-                     :`${coin.split(":").pop()} isn't in the whale watchlist (set WHALE_WATCH env var)`;
+                     :`${coin.split(":").pop()} isn't being recorded — your WHALE_WATCH env var excludes it (remove the var to record ALL coins)`;
     if(d.watched&&d.floor>whaleMin)msg+=` · recorder floor is ${obMoney(d.floor)} (WHALE_MIN_USD env)`;
     if(d.watched)msg+=" — recording 24/7, history builds from deploy day";
     toast(msg);
