@@ -72,6 +72,13 @@
   @media (max-width:980px){.add .lbl{display:none;}}
   #obBtn.on,#ftBtn.on,#whBtn.on{background:var(--accent2);border-color:var(--accent2);color:#fff;}
   #ftPop{width:225px;right:8px;top:44px;}
+  #whPop{width:235px;right:8px;top:44px;}
+  /* ⚖️ order-book $ dominance meter (chart overlay) */
+  #domMeter{display:none;position:absolute;top:44px;left:8px;z-index:20;background:#141a26ee;border:1px solid var(--border2);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);min-width:240px;backdrop-filter:blur(4px);}
+  #domMeter.on{display:block;}
+  #domMeter .dm-bar{height:8px;border-radius:4px;background:var(--red);overflow:hidden;margin:6px 0 4px;}
+  #domMeter #dmFill{height:100%;background:var(--green);width:50%;transition:width .4s ease;}
+  @media (max-width:720px){#domMeter{top:106px;left:8px;right:8px;min-width:0;}}
   #alN{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;background:var(--accent2);color:#fff;border-radius:8px;font-size:10px;font-weight:700;}
   #alN:empty{display:none;}
 
@@ -254,6 +261,7 @@
   <div class="mut" style="margin-top:6px;font-size:10px">combined orders per price zone · 🟢 buy = longs · 🔴 sell = shorts</div>
   <button class="go" id="obGo">Show walls (live)</button>
   <button class="add" id="obAlertGo" style="width:100%;margin-top:6px">🔔 Show + alert biggest walls</button>
+  <button class="add" id="domBtn" style="width:100%;margin-top:6px">⚖️ $ dominance meter (live)</button>
 </div>
 
 <div class="pop" id="ftPop">
@@ -262,6 +270,22 @@
   <div><label>Min zone $</label><input type="number" id="ftMin" value="50000" step="25000" min="0"></div></div>
   <div class="mut" style="margin-top:6px;font-size:10px">where trades EXECUTED · 🟢 buys · 🔴 sells · keeps accumulating while on (up to 4h) — leave it running to build the picture</div>
   <button class="go" id="ftGo">Show fills (live)</button>
+</div>
+
+<div class="pop" id="whPop">
+  <div class="ph"><b>🐋 Whale entries</b><span class="cx" data-close="whPop">✕</span></div>
+  <label>Show fills ≥ $</label><input type="number" id="whMin" value="100000" step="25000" min="0">
+  <button class="go" id="whGo">Show on chart</button>
+  <div style="border-top:1px solid var(--border);margin:10px 0 2px"></div>
+  <label>Telegram alert for fills ≥ $</label><input type="number" id="whAMin" value="250000" step="50000" min="0">
+  <button class="add" id="whAlertGo" style="width:100%;margin-top:6px">🔔 Turn ON whale alerts</button>
+  <div class="mut" style="margin-top:6px;font-size:10px">alerts watch ALL listed coins 24/7 (server-side) · max 1/min per coin · recorder saves fills ≥ $<span id="whFloor">25k</span></div>
+</div>
+
+<div id="domMeter">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><b id="dmTop" style="font-size:12px"></b><span class="cx" id="dmX">✕</span></div>
+  <div class="dm-bar"><div id="dmFill"></div></div>
+  <div class="mut" style="font-size:10px;display:flex;align-items:center;gap:4px;flex-wrap:wrap">near ±<input id="dmNear" type="number" step="0.5" min="0.2" max="25" value="2" style="width:46px;padding:1px 4px;background:var(--field);border:1px solid var(--border);color:var(--text);border-radius:4px;font:inherit;font-size:10px">% <span id="dmSubTxt"></span></div>
 </div>
 
 <script>
@@ -327,27 +351,36 @@ function applyMarkers(){const ms=[];inds.filter(i=>i.type==="trend50"&&shown(i)&
     whaleFills.forEach(f=>ms.push({time:Math.floor(f.t/1000/sec)*sec,position:f.side==="B"?"belowBar":"aboveBar",color:f.side==="B"?"#26a69a":"#ef5350",shape:f.side==="B"?"arrowUp":"arrowDown",text:money(f.ntl)}));}
   ms.sort((x,y)=>x.time-y.time);try{cs.setMarkers(ms);}catch(e){}}
 /* ---- 🐋 whale entries: big recorded fills as points on the chart ---- */
-let whaleOn=false,whaleFills=[],whaleTimer=null;
+let whaleOn=false,whaleFills=[],whaleTimer=null,whaleMin=100000;
 async function whaleRefresh(){
   try{
-    const d=await(await fetch(`/api/whales?coin=${encodeURIComponent(coin)}`)).json();
+    const d=await(await fetch(`/api/whales?coin=${encodeURIComponent(coin)}&min=${whaleMin}`)).json();
     whaleFills=d.fills||[];applyMarkers();return d;
   }catch(e){return null;}
 }
 function whaleStop(){whaleOn=false;whaleFills=[];clearInterval(whaleTimer);whaleTimer=null;document.getElementById("whBtn").classList.remove("on");applyMarkers();}
-async function toggleWhales(){
+function updWhAlertBtn(cfg){const b=document.getElementById("whAlertGo");b.dataset.on=cfg&&cfg.on?"1":"";b.textContent=cfg&&cfg.on?`🔕 Turn OFF alerts (on, ≥ ${obMoney(cfg.min)})`:"🔔 Turn ON whale alerts";if(cfg&&cfg.min)document.getElementById("whAMin").value=cfg.min;}
+function toggleWhales(){
   if(whaleOn){whaleStop();toast("whale entries hidden");return;}
-  whaleOn=true;document.getElementById("whBtn").classList.add("on");
+  try{const s=parseFloat(localStorage.whMin);if(!isNaN(s))document.getElementById("whMin").value=s;}catch(e){}
+  openOnly("whPop");
+  fetch("/api/whalealert").then(r=>r.json()).then(cfg=>{updWhAlertBtn(cfg);
+    document.getElementById("whFloor").textContent=obMoney(cfg.floor||25000).replace("$","");}).catch(()=>{});
+}
+async function whaleStart(min){
+  whaleMin=min;whaleOn=true;document.getElementById("whBtn").classList.add("on");
   toast("loading whale entries…");
   const d=await whaleRefresh();
   if(!d){whaleStop();toast("couldn't load whale entries");return;}
-  const money=n=>n>=1e6?"$"+(n/1e6).toFixed(1)+"M":"$"+Math.round(n/1e3)+"k";
   if(!whaleFills.length){
-    toast(d.watched?`no fills ≥ ${money(d.min_usd)} recorded yet on ${coin.split(":").pop()} — recording 24/7, history builds from deploy day`
-                   :`${coin.split(":").pop()} isn't in the whale watchlist (set WHALE_WATCH env var)`);
+    let msg=d.watched?`no fills ≥ ${obMoney(whaleMin)} recorded yet on ${coin.split(":").pop()}`
+                     :`${coin.split(":").pop()} isn't in the whale watchlist (set WHALE_WATCH env var)`;
+    if(d.watched&&d.floor>whaleMin)msg+=` · recorder floor is ${obMoney(d.floor)} (WHALE_MIN_USD env)`;
+    if(d.watched)msg+=" — recording 24/7, history builds from deploy day";
+    toast(msg);
   }else{
     const since=new Date(whaleFills[0].t);
-    toast(`🐋 ${whaleFills.length} fills ≥ ${money(d.min_usd)} since ${since.toLocaleDateString()} · ▲ buys ▼ sells · updates live`);
+    toast(`🐋 ${whaleFills.length} fills ≥ ${obMoney(whaleMin)} since ${since.toLocaleDateString()} · ▲ buys ▼ sells · updates live`);
   }
   whaleTimer=setInterval(whaleRefresh,60000);  // pick up new whales while on
 }
@@ -556,6 +589,36 @@ async function obStartLive(min,agg){
   toast(obLive.lines.length?`📊 live walls ON — updating every ${OB_REFRESH_MS/1000}s · tap 📊 to turn off`
                            :"📊 live ON but no walls that big yet — lower Min wall $ or widen the zone");
 }
+/* ---- ⚖️ order-book $ dominance meter ---- */
+/* Total resting $ per side (whole book + near ±2%), as a live pill on the
+   chart. Green share of the bar = bid (long) dominance. */
+let domTimer=null;
+function domNearPct(){const v=parseFloat(document.getElementById("dmNear").value);return isNaN(v)?2:Math.max(0.2,Math.min(25,v));}
+async function domTick(){
+  try{
+    const np=domNearPct();
+    const d=await(await fetch(`/api/bookdominance?coin=${encodeURIComponent(coin)}&near=${np}`)).json();
+    if(d.error||d.bid_total==null)return;
+    const bt=d.bid_total,at=d.ask_total,pct=Math.round(100*bt/(bt+at||1));
+    document.getElementById("dmTop").innerHTML=`⚖️ <span style="color:#26a69a">$${(bt/1e6).toFixed(1)}M bids</span> · <b style="color:${pct>=55?"#26a69a":pct<=45?"#ef5350":"#e8edf7"}">${pct}% long</b> · <span style="color:#ef5350">$${(at/1e6).toFixed(1)}M asks</span>`;
+    document.getElementById("dmFill").style.width=pct+"%";
+    let sub=`— · ${coin.split(":").pop()} whole book above · updates 5s`;
+    if(d.bid_near!=null&&d.ask_near!=null){const nb=d.bid_near,na=d.ask_near,npc=Math.round(100*nb/(nb+na||1));
+      const m=v=>v>=1e6?"$"+(v/1e6).toFixed(1)+"M":"$"+Math.round(v/1e3)+"k";
+      sub=`→ ${npc}% long (${m(nb)} vs ${m(na)}) · ${coin.split(":").pop()} · updates 5s`;}
+    document.getElementById("dmSubTxt").textContent=sub;
+  }catch(e){}
+}
+function domStop(){clearInterval(domTimer);domTimer=null;document.getElementById("domMeter").classList.remove("on");}
+function toggleDom(){
+  if(domTimer){domStop();toast("dominance meter off");return;}
+  closePops();
+  try{const s=parseFloat(localStorage.domNear);if(!isNaN(s))document.getElementById("dmNear").value=s;}catch(e){}
+  document.getElementById("domMeter").classList.add("on");
+  document.getElementById("dmTop").textContent="⚖️ loading…";document.getElementById("dmSubTxt").textContent="";
+  domTick();domTimer=setInterval(domTick,5000);
+}
+
 /* ---- ⚡ filled orders (where trades actually executed) ---- */
 /* Twin of the 📊 walls live view, but for EXECUTED trades: recentTrades
    aggregated into price zones. Client-side lines only, refreshed until the
@@ -834,6 +897,19 @@ function init(){mkChart();fillTypes();chips();
   document.getElementById("obGo").onclick=()=>{const{mn,agg}=obParams();document.getElementById("obPop").classList.remove("on");obStartLive(mn,agg);};
   document.getElementById("ftBtn").onclick=toggleFills;
   document.getElementById("whBtn").onclick=toggleWhales;
+  document.getElementById("domBtn").onclick=toggleDom;
+  document.getElementById("dmX").onclick=()=>{domStop();};
+  document.getElementById("dmNear").onchange=()=>{const v=domNearPct();document.getElementById("dmNear").value=v;try{localStorage.domNear=v;}catch(e){}if(domTimer)domTick();};
+  document.getElementById("whGo").onclick=()=>{const v=parseFloat(document.getElementById("whMin").value);const mn=isNaN(v)?100000:Math.max(0,v);try{localStorage.whMin=mn;}catch(e){}document.getElementById("whPop").classList.remove("on");whaleStart(mn);};
+  document.getElementById("whAlertGo").onclick=async()=>{
+    const b=document.getElementById("whAlertGo");const turnOn=!b.dataset.on;
+    const v=parseFloat(document.getElementById("whAMin").value);const mn=isNaN(v)?250000:Math.max(0,v);
+    try{
+      const cfg=await(await fetch("/api/whalealert",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({on:turnOn,min:mn})})).json();
+      updWhAlertBtn(cfg);
+      toast(cfg.on?`🔔 whale alerts ON — Telegram for any fill ≥ ${obMoney(cfg.min)} on watched coins (24/7)`:"🔕 whale alerts off");
+    }catch(e){toast("couldn't update whale alerts");}
+  };
   document.getElementById("ftGo").onclick=()=>{const v=parseFloat(document.getElementById("ftMin").value);const mn=isNaN(v)?50000:Math.max(0,v);const agg=+document.getElementById("ftAgg").value||3;document.getElementById("ftPop").classList.remove("on");ftStart(mn,agg);};
   document.getElementById("obAlertGo").onclick=()=>{const{mn,agg}=obParams();document.getElementById("obPop").classList.remove("on");drawOrderbookWalls(mn,agg,true);};
   document.getElementById("muteBtn").onclick=toggleMute;

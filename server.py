@@ -642,7 +642,7 @@ def _round_sig(px, n_sig):
 # stream and kept on the persistent volume — so weeks/months of whale entries
 # accumulate from first deploy. (Old trades can't be backfilled from the free
 # API; recording forward is the honest way to build this history.)
-WHALE_MIN_USD = float(os.environ.get("WHALE_MIN_USD", "100000"))
+WHALE_MIN_USD = float(os.environ.get("WHALE_MIN_USD", "25000"))  # recording floor
 WHALE_WATCH = [s if ":" in s else f"xyz:{s}" for s in
                os.environ.get("WHALE_WATCH", os.environ.get("OPT_WATCH", _DEFAULT_WATCH))
                .replace(",", " ").split()]
@@ -679,8 +679,31 @@ def record_whale(coin, px, sz, side, t):
     save_whales()  # rare events — a write per whale is fine
 
 
+_whale_alert_last = {}  # coin -> last alert ts (1/min per coin spam guard)
+
+
+def _maybe_whale_alert(coin, px, sz, side, ntl):
+    cfg = SETTINGS.get("whale_alert") or {}
+    if not cfg.get("on") or muted():
+        return
+    try:
+        if ntl < float(cfg.get("min") or 1e18):
+            return
+    except Exception:
+        return
+    now = time.time()
+    if now - _whale_alert_last.get(coin, 0) < 60:
+        return
+    _whale_alert_last[coin] = now
+    amt = f"${ntl/1e6:.2f}M" if ntl >= 1e6 else f"${ntl/1e3:.0f}k"
+    word = "BUY 🟢 (long)" if side == "B" else "SELL 🔴 (short)"
+    PENDING.append(f"🐋 <b>{coin.split(':')[-1]}</b> whale {word} {amt} @ {px:g} · size {sz:g}")
+    save_outbox()
+
+
 async def whale_ws_loop(app):
-    """Subscribe to live trades for the watchlist; record fills >= WHALE_MIN_USD.
+    """Subscribe to live trades for the watchlist; record fills >= WHALE_MIN_USD
+    and (optionally) Telegram-alert the ones >= the user's alert threshold.
     Reconnects forever on any failure."""
     session = app["session"]
     print(f"whale recorder: {len(WHALE_WATCH)} coins, min ${WHALE_MIN_USD:,.0f}")
@@ -699,21 +722,44 @@ async def whale_ws_loop(app):
                     for t in j.get("data") or []:
                         px, sz = _f(t.get("px")), _f(t.get("sz"))
                         if px and sz and px * sz >= WHALE_MIN_USD:
-                            record_whale(t.get("coin"), px, sz,
-                                         t.get("side"), t.get("time") or 0)
+                            cn = t.get("coin")
+                            record_whale(cn, px, sz, t.get("side"), t.get("time") or 0)
+                            _maybe_whale_alert(cn, px, sz, t.get("side"), px * sz)
         except Exception as e:
             print("whale ws error", e)
         await asyncio.sleep(5)
 
 
 async def api_whales(request):
-    """🐋 Big fills recorded for a coin (points for the chart)."""
+    """🐋 Big fills recorded for a coin, filtered by a user-chosen min $."""
     coin = request.query.get("coin", "")
-    fills = sorted(WHALES.get(coin, []), key=lambda w: w["t"])[-500:]
-    return web.json_response({"coin": coin, "min_usd": WHALE_MIN_USD,
+    try:
+        mn = max(0.0, float(request.query.get("min", 0)))
+    except Exception:
+        mn = 0.0
+    fills = [w for w in sorted(WHALES.get(coin, []), key=lambda w: w["t"])
+             if w["ntl"] >= mn][-500:]
+    return web.json_response({"coin": coin, "floor": WHALE_MIN_USD,
                               "watched": coin in WHALE_WATCH,
                               "since": fills[0]["t"] if fills else None,
                               "fills": fills})
+
+
+async def api_whale_alert(request):
+    """GET -> whale-alert config; POST {on, min} -> set it. When on, every
+    fill >= min on any watched coin queues a Telegram message (24/7,
+    server-side, durable outbox, max 1/min per coin)."""
+    if request.method == "POST":
+        b = await request.json()
+        try:
+            amn = float(b.get("min") or 250000)
+        except Exception:
+            amn = 250000.0
+        SETTINGS["whale_alert"] = {"on": bool(b.get("on")),
+                                   "min": max(WHALE_MIN_USD, amn)}
+        save_settings()
+    cfg = SETTINGS.get("whale_alert") or {"on": False, "min": 250000.0}
+    return web.json_response({**cfg, "floor": WHALE_MIN_USD})
 
 
 # recentTrades only returns a small recent slice (these markets trade in small
@@ -775,6 +821,64 @@ async def compute_filled_zones(session, coin, min_notional=50000.0,
             "sell_total": round(sum(v["notional"] for v in sells.values()), 2),
             "trades": len(buf),
             "buys": top(buys), "sells": top(sells)}
+
+
+async def api_book_dominance(request):
+    """⚖️ Total resting $ per side of the book (whole book) plus a near-field
+    sum within a USER-CHOSEN ±near% of mid. Uses the finest book resolution
+    whose depth actually covers that range, so ±0.5% and ±10% both work."""
+    coin = request.query.get("coin", "")
+    if not coin:
+        return web.json_response({"error": "no coin"}, status=400)
+    try:
+        near_pct = max(0.1, min(25.0, float(request.query.get("near", 2))))
+    except Exception:
+        near_pct = 2.0
+    session = request.app["session"]
+    books = {}
+    for ns in (4, 3, 2):
+        try:
+            async with session.post(HL_INFO, json={"type": "l2Book", "coin": coin,
+                                                   "nSigFigs": ns}) as r:
+                j = await r.json()
+            lv = (j or {}).get("levels") or []
+            if len(lv) < 2 or not lv[0] or not lv[1]:
+                continue
+            def rows(side):
+                out = []
+                for x in side:
+                    px, sz = _f(x.get("px")), _f(x.get("sz"))
+                    if px and sz:
+                        out.append((px, sz))
+                return out
+            books[ns] = (rows(lv[0]), rows(lv[1]))
+        except Exception:
+            continue
+    if 2 not in books:
+        return web.json_response({"error": f"no order book for {coin}"}, status=502)
+    bid_total = round(sum(p * s for p, s in books[2][0]), 2)
+    ask_total = round(sum(p * s for p, s in books[2][1]), 2)
+    # mid from the finest book available (levels are sorted best-first)
+    fine = books.get(4) or books.get(3) or books[2]
+    mid = (fine[0][0][0] + fine[1][0][0]) / 2 if fine[0] and fine[1] else None
+    bid_near = ask_near = None
+    if mid:
+        # finest resolution whose depth covers ~the requested band on both sides
+        chosen = 2
+        for ns in (4, 3):
+            if ns not in books or not books[ns][0] or not books[ns][1]:
+                continue
+            cov_b = (mid - min(p for p, _ in books[ns][0])) / mid * 100
+            cov_a = (max(p for p, _ in books[ns][1]) - mid) / mid * 100
+            if cov_b >= near_pct * 0.9 and cov_a >= near_pct * 0.9:
+                chosen = ns
+                break
+        b, a = books[chosen]
+        bid_near = round(sum(p * s for p, s in b if (mid - p) / mid * 100 <= near_pct), 2)
+        ask_near = round(sum(p * s for p, s in a if (p - mid) / mid * 100 <= near_pct), 2)
+    return web.json_response({"bid_total": bid_total, "ask_total": ask_total,
+                              "bid_near": bid_near, "ask_near": ask_near,
+                              "near_pct": near_pct})
 
 
 async def api_filled_orders(request):
@@ -1956,6 +2060,9 @@ def make_app():
         web.get("/api/orderbookwalls", api_orderbook_walls),
         web.get("/api/filledorders", api_filled_orders),
         web.get("/api/whales", api_whales),
+        web.get("/api/whalealert", api_whale_alert),
+        web.post("/api/whalealert", api_whale_alert),
+        web.get("/api/bookdominance", api_book_dominance),
         web.get("/api/journal", api_journal),
         web.get("/api/scorezone", api_score_zone),
         web.get("/api/scan", api_scan),
