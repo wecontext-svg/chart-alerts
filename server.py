@@ -441,6 +441,43 @@ async def api_delete_level(request):
     return web.json_response({"deleted": before - len(LEVELS)})
 
 
+async def api_watchlist(request):
+    """⭐ Personal watchlist (stored in settings, syncs across devices).
+    GET -> {coins, rows:[{coin,px,chg,vol}]} with a live snapshot.
+    PUT {coins:[...]} -> replace the list."""
+    if request.method == "PUT":
+        b = await request.json()
+        coins = b.get("coins")
+        if isinstance(coins, list):
+            seen, clean = set(), []
+            for c in coins:
+                if isinstance(c, str) and c and c not in seen:
+                    seen.add(c); clean.append(c)
+            SETTINGS["watchlist"] = clean[:60]
+            save_settings()
+    coins = SETTINGS.get("watchlist") or []
+    rows = []
+    if coins:
+        session = request.app["session"]
+        ctxmap = {}
+        for dex in sorted(set(c.split(":")[0] for c in coins if ":" in c)):
+            try:
+                async with session.post(HL_INFO, json={"type": "metaAndAssetCtxs", "dex": dex}) as r:
+                    m = await r.json()
+                for i, a in enumerate(m[0]["universe"]):
+                    ctxmap[a["name"]] = m[1][i]
+            except Exception as e:
+                print("watchlist ctx error", dex, e)
+        for c in coins:
+            ctx = ctxmap.get(c) or {}
+            px = _f(ctx.get("markPx"))
+            prev = _f(ctx.get("prevDayPx"))
+            chg = round((px - prev) / prev * 100, 2) if (px and prev) else None
+            rows.append({"coin": c, "px": px, "chg": chg,
+                         "vol": _f(ctx.get("dayNtlVlm")) or 0})
+    return web.json_response({"coins": coins, "rows": rows})
+
+
 async def api_mute(request):
     """GET -> current mute state; POST {muted:bool} -> set it. Muting silences
     all Telegram sends without deleting alerts; arming state keeps updating so
@@ -2070,6 +2107,8 @@ def make_app():
         web.post("/api/test", api_test),
         web.get("/api/mute", api_mute),
         web.post("/api/mute", api_mute),
+        web.get("/api/watchlist", api_watchlist),
+        web.put("/api/watchlist", api_watchlist),
         web.get("/api/indicators", api_indicators),
         web.put("/api/indicators", api_indicators),
         web.get("/api/optionlevels", api_option_levels),

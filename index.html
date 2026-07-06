@@ -73,6 +73,16 @@
   #obBtn.on,#ftBtn.on,#whBtn.on,#clnBtn.on{background:var(--accent2);border-color:var(--accent2);color:#fff;}
   #domMeter.chidden{display:none!important;}
   #ftPop{width:225px;right:8px;top:44px;}
+  #wlPop{width:258px;left:8px;top:44px;max-height:80vh;overflow:auto;}
+  #wlBtn.on{background:var(--gold);border-color:var(--gold);color:#1a1200;}
+  .wlrow{display:flex;align-items:center;gap:8px;padding:8px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;border-top:1px solid var(--border);}
+  .wlrow:first-child{border-top:0;}
+  .wlrow:hover{background:#151b28;}
+  .wlrow .wsym{font-weight:700;flex:1;color:var(--text);}
+  .wlrow .wpx{color:var(--muted);font-size:12px;}
+  .wlrow .wchg{font-size:12px;min-width:58px;text-align:right;font-weight:600;}
+  .wlrow .wx{color:var(--muted);padding:2px 5px;border-radius:4px;}
+  .wlrow .wx:hover{color:var(--red);background:#ef535018;}
   #whPop{width:235px;right:8px;top:44px;}
   /* ⚖️ order-book $ dominance meter (chart overlay) */
   #domMeter{display:none;position:absolute;top:44px;left:8px;z-index:20;background:#141a26ee;border:1px solid var(--border2);border-radius:10px;padding:8px 10px;box-shadow:var(--shadow);min-width:240px;backdrop-filter:blur(4px);}
@@ -189,6 +199,7 @@
 <div id="bar">
   <div id="barScroll">
     <select id="sym"></select>
+    <button class="add" id="wlBtn" title="watchlist — track coins with live price & 24h change">⭐</button>
     <span class="tf" id="tf"><b data-i="5m">5m</b><b data-i="1h">1h</b><b data-i="4h" class="on">4h</b><b data-i="1d">D</b></span>
     <span class="tools" id="tools" title="drawing tools"><b data-t="cursor" class="on" title="cursor — navigate (c)">▱</b><b data-t="level" title="horizontal level (h)">─</b><b data-t="trend" title="trend line (t)">╱</b><b data-t="ray" title="ray (r)">→</b><b data-t="extended" title="extended line (e)">⟷</b><b data-t="measure" title="measure (m)">📏</b><b data-t="fib" title="fib retracement (f)">𝑓</b><b data-t="vwapanchor" title="anchored VWAP — click a bar (a)">⚓</b></span>
     <span class="dot" id="dot"></span>
@@ -282,6 +293,12 @@
   <label>Telegram alert for fills ≥ $</label><input type="number" id="whAMin" value="250000" step="50000" min="0">
   <button class="add" id="whAlertGo" style="width:100%;margin-top:6px">🔔 Turn ON whale alerts</button>
   <div class="mut" style="margin-top:6px;font-size:10px">alerts watch ALL listed coins 24/7 (server-side) · max 1/min per coin · recorder saves fills ≥ $<span id="whFloor">25k</span></div>
+</div>
+
+<div class="pop" id="wlPop">
+  <div class="ph"><b>⭐ Watchlist</b><span class="cx" data-close="wlPop">✕</span></div>
+  <button class="add" id="wlAdd" style="width:100%;margin-bottom:8px">＋ Add current</button>
+  <div id="wlBody" class="mut" style="font-size:12px">…</div>
 </div>
 
 <div id="domMeter">
@@ -704,7 +721,40 @@ async function drawOrderbookWalls(minN,agg,arm){
 }
 
 /* ---- wiring ---- */
-function setCoin(c){if(!c)return;clearHist();clearAllZones();coin=c;load_().then(()=>{chips();redraw();connect();if(obLive)obRefresh();if(ftLive)ftRefresh();if(whaleOn)whaleRefresh();else applyMarkers();document.getElementById("obBtn").classList.toggle("on",obActive());});}
+/* ---- ⭐ watchlist: track coins with live price + 24h change (server-synced) ---- */
+let watchlist=[],wlTimer=null,wlPending=0;
+function inWatch(){return watchlist.includes(coin);}
+function updateWlBtn(){const b=document.getElementById("wlBtn");if(b)b.classList.toggle("on",inWatch());}
+function wlAddLabel(){const a=document.getElementById("wlAdd");if(a)a.textContent=(inWatch()?"✓ In watchlist — tap to remove":"＋ Add ")+(inWatch()?"":coin.split(":").pop());}
+async function loadWatchlist(){try{const d=await(await fetch("/api/watchlist")).json();if(wlPending===0)watchlist=d.coins||[];}catch(e){}updateWlBtn();}
+async function saveWatchlist(){wlPending++;try{await fetch("/api/watchlist",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({coins:watchlist})});}catch(e){}finally{wlPending--;}}
+async function toggleWatch(c){c=c||coin;watchlist=watchlist.includes(c)?watchlist.filter(x=>x!==c):[...watchlist,c];updateWlBtn();wlAddLabel();await saveWatchlist();renderWatch();}
+function openWatchlist(){
+  if(!openOnly("wlPop")){clearInterval(wlTimer);wlTimer=null;return;}
+  wlAddLabel();renderWatch();clearInterval(wlTimer);wlTimer=setInterval(renderWatch,10000);
+}
+async function renderWatch(){
+  const pop=document.getElementById("wlPop");if(!pop.classList.contains("on")){clearInterval(wlTimer);wlTimer=null;return;}
+  const b=document.getElementById("wlBody");
+  try{
+    const d=await(await fetch("/api/watchlist")).json();
+    if(wlPending===0)watchlist=d.coins||[];  // don't clobber optimistic edits mid-write
+    updateWlBtn();wlAddLabel();
+    if(!watchlist.length){b.innerHTML='<div class="mut">empty — tap ＋ Add to track this coin. Switch symbols and add more; tap any row to jump to its chart.</div>';return;}
+    const esc=s=>String(s).replace(/[&<]/g,x=>x==="&"?"&amp;":"&lt;");
+    const rmap={};(d.rows||[]).forEach(r=>rmap[r.coin]=r);  // price lookup; membership from local list
+    b.innerHTML=watchlist.map(cn=>{
+      const r=rmap[cn]||{};
+      const chg=r.chg==null?"—":(r.chg>0?"+":"")+r.chg+"%";
+      const col=r.chg>0?"#26a69a":r.chg<0?"#ef5350":"#8b95a7";
+      const px=r.px==null?"—":(+r.px).toLocaleString(undefined,{maximumFractionDigits:4});
+      return `<div class="wlrow" data-c="${esc(cn)}"><span class="wsym">${esc(cn.split(":").pop())}</span><span class="wpx">${px}</span><span class="wchg" style="color:${col}">${chg}</span><span class="wx" data-rm="${esc(cn)}" title="remove">✕</span></div>`;
+    }).join("");
+    b.querySelectorAll(".wlrow").forEach(el=>el.onclick=e=>{if(e.target.dataset.rm)return;const c=el.dataset.c;document.getElementById("sym").value=c;setCoin(c);closePops();clearInterval(wlTimer);wlTimer=null;});
+    b.querySelectorAll("[data-rm]").forEach(x=>x.onclick=e=>{e.stopPropagation();toggleWatch(x.dataset.rm);});
+  }catch(e){b.textContent="couldn't load watchlist";}
+}
+function setCoin(c){if(!c)return;clearHist();clearAllZones();coin=c;updateWlBtn();load_().then(()=>{chips();redraw();connect();if(obLive)obRefresh();if(ftLive)ftRefresh();if(whaleOn)whaleRefresh();else applyMarkers();document.getElementById("obBtn").classList.toggle("on",obActive());});}
 async function loadMarkets(){const sym=document.getElementById("sym");let list=null;try{const r=await fetch("/api/markets");const j=await r.json();if(Array.isArray(j)&&j.length)list=j;}catch(e){}
   if(!list)list=Object.entries(COINS).map(([k,v])=>({coin:v,sym:k,vol:0}));
   sym.innerHTML=list.map(m=>`<option value="${m.coin}"${m.coin===coin?" selected":""}>${m.sym}</option>`).join("");}
@@ -914,6 +964,8 @@ function init(){mkChart();fillTypes();chips();
   document.getElementById("ftBtn").onclick=toggleFills;
   document.getElementById("whBtn").onclick=toggleWhales;
   document.getElementById("clnBtn").onclick=toggleCleanChart;
+  document.getElementById("wlBtn").onclick=openWatchlist;
+  document.getElementById("wlAdd").onclick=()=>toggleWatch();
   document.getElementById("domBtn").onclick=toggleDom;
   document.getElementById("dmX").onclick=()=>{domStop();};
   document.getElementById("dmNear").onchange=()=>{const v=domNearPct();document.getElementById("dmNear").value=v;try{localStorage.domNear=v;}catch(e){}if(domTimer)domTick();};
@@ -942,7 +994,7 @@ function init(){mkChart();fillTypes();chips();
   document.getElementById("testBtn").onclick=async()=>{const r=document.getElementById("testRes");r.textContent="sending…";try{const d=await(await fetch("/api/test",{method:"POST"})).json();r.textContent=(d.ok?"✅ ":"⚠️ ")+d.detail;r.style.color=d.ok?"#26a69a":"#ef5350";}catch(e){r.textContent="⚠️ "+e;r.style.color="#ef5350";}};
   document.addEventListener("keydown",e=>{if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT")return;const m={"1":"5m","2":"1h","3":"4h","4":"1d"};if(m[e.key])setTF(m[e.key]);const tk={t:"trend",r:"ray",e:"extended",m:"measure",f:"fib",a:"vwapanchor",h:"level",c:"cursor"};if(tk[e.key])setTool(tk[e.key]);if(e.key==="i")document.getElementById("addBtn").click();if(e.key==="v")toggleCleanChart();if(e.key==="Escape"){closePop();closeConf();clearMeasure();setTool("cursor");document.getElementById("alerts").classList.remove("on");}});
   document.addEventListener("click",e=>{const p=document.getElementById("indPop");if(p.classList.contains("on")&&!p.contains(e.target)&&e.target.id!=="addBtn"&&!e.target.closest(".chip"))closePop();});
-  load_().then(loadIndicators).then(loadLevels).then(connect);}
+  load_().then(loadIndicators).then(loadLevels).then(connect);loadWatchlist();}
 function setTF(i){interval=i;document.querySelectorAll("#tf b").forEach(x=>x.classList.toggle("on",x.dataset.i===i));load_().then(()=>{connect();applyMarkers();});}
 init();
 </script>
