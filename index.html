@@ -74,6 +74,7 @@
   #domMeter.chidden{display:none!important;}
   #ftPop{width:225px;right:8px;top:44px;}
   #wlPop{width:258px;left:8px;top:44px;max-height:80vh;overflow:auto;}
+  #opPop{width:235px;right:8px;top:44px;}
   #wlBtn.on{background:var(--gold);border-color:var(--gold);color:#1a1200;}
   .wlrow{display:flex;align-items:center;gap:8px;padding:8px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;border-top:1px solid var(--border);}
   .wlrow:first-child{border-top:0;}
@@ -293,6 +294,18 @@
   <label>Telegram alert for fills ≥ $</label><input type="number" id="whAMin" value="250000" step="50000" min="0">
   <button class="add" id="whAlertGo" style="width:100%;margin-top:6px">🔔 Turn ON whale alerts</button>
   <div class="mut" style="margin-top:6px;font-size:10px">alerts watch ALL listed coins 24/7 (server-side) · max 1/min per coin · recorder saves fills ≥ $<span id="whFloor">25k</span></div>
+</div>
+
+<div class="pop" id="opPop">
+  <div class="ph"><b>📌 Option levels</b><span class="cx" data-close="opPop">✕</span></div>
+  <label>Expiry</label>
+  <select id="opExp">
+    <option value="near">Nearest (SPX/NDX: daily)</option>
+    <option value="week">Friday (weekly)</option>
+    <option value="month">Monthly (3rd Friday)</option>
+  </select>
+  <div class="mut" style="margin-top:6px;font-size:10px">max pain · call/put walls · gamma flip — drawn as levels you can arm 🔔 · monthly = biggest open interest, most structural</div>
+  <button class="go" id="opGo">Show levels</button>
 </div>
 
 <div class="pop" id="wlPop">
@@ -577,9 +590,10 @@ function openOnly(id){const p=document.getElementById(id);const was=p.classList.
 async function drawOptionLevels(){
   const existing=levels.filter(l=>l.coin===coin&&(l.note||"").startsWith("📌"));
   if(existing.length){for(const l of existing)await del(l.id);toast("option levels removed");return;}  // toggle off
+  const exp=(localStorage.opExp&&["near","week","month"].includes(localStorage.opExp))?localStorage.opExp:"near";
   toast("loading option levels…");
   try{
-    const d=await(await fetch(`/api/optionlevels?coin=${encodeURIComponent(coin)}`)).json();
+    const d=await(await fetch(`/api/optionlevels?coin=${encodeURIComponent(coin)}&exp=${exp}`)).json();
     if(d.error){toast(d.error);return;}
     const mk=async(price,note,color)=>{if(price==null)return;const l=await(await fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({coin,price,direction:"cross",alert_enabled:false,note,color})})).json();levels.push(l);draw(l);};
     await mk(d.put_wall,`📌 Put Wall ${d.expiry}`,"#26a69a");
@@ -977,7 +991,12 @@ function init(){mkChart();fillTypes();chips();
   new ResizeObserver(updFade).observe(document.getElementById("chips"));
   updFade();
   document.getElementById("clrM").onclick=clearMeasure;
-  document.getElementById("opBtn").onclick=drawOptionLevels;
+  document.getElementById("opBtn").onclick=()=>{
+    if(levels.some(l=>l.coin===coin&&(l.note||"").startsWith("📌"))){drawOptionLevels();return;}  // toggle off
+    const s=document.getElementById("opExp");if(localStorage.opExp)s.value=localStorage.opExp;
+    openOnly("opPop");
+  };
+  document.getElementById("opGo").onclick=()=>{try{localStorage.opExp=document.getElementById("opExp").value;}catch(e){}document.getElementById("opPop").classList.remove("on");drawOptionLevels();};
   document.getElementById("opHistBtn").onclick=toggleHistory;
   document.getElementById("obBtn").onclick=toggleOrderbookWalls;
   const obParams=()=>{const v=parseFloat(document.getElementById("obMin").value);return {mn:isNaN(v)?1000000:Math.max(0,v),agg:+document.getElementById("obAgg").value||3};};

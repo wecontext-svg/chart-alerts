@@ -309,12 +309,12 @@ _opt_cond_cache = {}
 _book_cond_cache = {}
 
 
-async def get_option_levels_cached(session, coin, ttl=3600, monthly=False):
-    key = (coin, "m" if monthly else "w")
+async def get_option_levels_cached(session, coin, ttl=3600, mode="near"):
+    key = (coin, mode)
     ent = _opt_cond_cache.get(key)
     if ent and time.time() - ent[0] < ttl:
         return ent[1]
-    res = await compute_option_levels(session, coin, monthly=monthly)
+    res = await compute_option_levels(session, coin, mode=mode)
     _opt_cond_cache[key] = (time.time(), res)
     return res
 
@@ -513,19 +513,23 @@ def _bs_gamma(S, K, sigma, T):
     return math.exp(-0.5 * d1 * d1) / math.sqrt(2 * math.pi) / (S * sigma * math.sqrt(T))
 
 
-async def compute_option_levels(session, coin, monthly=False):
+async def compute_option_levels(session, coin, mode="near"):
     """Max pain + call/put walls + net GEX / gamma flip from CBOE's free
     delayed feed. Maps HL symbol (xyz:NVDA) -> underlying (NVDA).
-    monthly=False -> nearest expiry (weekly); monthly=True -> the standard
-    monthly opex (3rd Friday), whose bigger open interest makes its walls
-    more structural. Returns a plain dict (with "error" on failure)."""
+    mode: "near" = nearest expiry (for SPX/NDX that's the DAILY; for most
+    stocks the Friday weekly) · "week" = next Friday · "month" = 3rd-Friday
+    opex (biggest OI, most structural). Returns dict ("error" on failure)."""
     sym = coin.split(":")[-1].upper()
     if not sym:
         return {"error": "no symbol"}
+    # index perps track index options under CBOE's underscore symbols
+    # (price scales verified 1:1: xyz:SP500≈SPX, xyz:XYZ100≈NDX)
+    sym = {"SP500": "_SPX", "XYZ100": "_NDX"}.get(sym, sym)
     url = f"https://cdn.cboe.com/api/global/delayed_quotes/options/{sym}.json"
     try:
+        # index chains are huge (SPX ~13MB) — generous timeout
         async with session.get(
-                url, headers={"User-Agent": "Mozilla/5.0"}, timeout=ClientTimeout(total=15)) as r:
+                url, headers={"User-Agent": "Mozilla/5.0"}, timeout=ClientTimeout(total=40)) as r:
             if r.status != 200:
                 return {"error": f"No options data for {sym}."}
             j = await r.json()
@@ -558,10 +562,14 @@ async def compute_option_levels(session, coin, monthly=False):
     future = sorted(e for e in byexp if e >= today)
     if not future:
         return {"error": f"No upcoming expiry for {sym}."}
-    if monthly:
+    if mode == "month":
         # standard monthly opex = 3rd Friday; else whatever is closest to ~30d
         m3 = [e for e in future if e.weekday() == 4 and 15 <= e.day <= 21]
         exp = m3[0] if m3 else min(future, key=lambda e: abs((e - today).days - 30))
+    elif mode == "week":
+        # next Friday (the classic weekly) — falls back to nearest expiry
+        fr = [e for e in future if e.weekday() == 4]
+        exp = fr[0] if fr else future[0]
     else:
         exp = future[0]
     calls, puts = byexp[exp]["C"], byexp[exp]["P"]
@@ -613,10 +621,16 @@ async def compute_option_levels(session, coin, monthly=False):
 
 
 async def api_option_levels(request):
-    """Live button: compute levels and record today's snapshot for history."""
+    """Live button: compute levels for a chosen expiry (?exp=near|week|month).
+    Only 'near' snapshots feed the 📈 daily history (keeps the series apples-
+    to-apples)."""
     coin = request.query.get("coin", "")
-    res = await compute_option_levels(request.app["session"], coin)
-    record_opt_snapshot(coin, res)
+    mode = request.query.get("exp", "near")
+    if mode not in ("near", "week", "month"):
+        mode = "near"
+    res = await compute_option_levels(request.app["session"], coin, mode=mode)
+    if mode == "near":
+        record_opt_snapshot(coin, res)
     return web.json_response(res)
 
 
