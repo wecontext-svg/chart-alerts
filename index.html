@@ -200,7 +200,7 @@
   <div id="barScroll">
     <select id="sym"></select>
     <button class="add" id="wlBtn" title="watchlist — track coins with live price & 24h change">⭐</button>
-    <span class="tf" id="tf"><b data-i="5m">5m</b><b data-i="1h">1h</b><b data-i="4h" class="on">4h</b><b data-i="1d">D</b></span>
+    <span class="tf" id="tf"><b data-i="5m">5m</b><b data-i="1h">1h</b><b data-i="4h" class="on">4h</b><b data-i="1d">D</b><b data-i="1w">W</b></span>
     <span class="tools" id="tools" title="drawing tools"><b data-t="cursor" class="on" title="cursor — navigate (c)">▱</b><b data-t="level" title="horizontal level (h)">─</b><b data-t="trend" title="trend line (t)">╱</b><b data-t="ray" title="ray (r)">→</b><b data-t="extended" title="extended line (e)">⟷</b><b data-t="measure" title="measure (m)">📏</b><b data-t="fib" title="fib retracement (f)">𝑓</b><b data-t="vwapanchor" title="anchored VWAP — click a bar (a)">⚓</b></span>
     <span class="dot" id="dot"></span>
     <span class="ohlc" id="ohlc"></span>
@@ -250,7 +250,7 @@
 <div class="pop" id="confPop">
   <div class="ph"><b>🔗 Custom alert</b><span class="cx" id="confX">✕</span></div>
   <div class="mut" style="margin:-4px 0 8px">ALL conditions, or switch to score mode (X of N points)</div>
-  <div class="pp"><div><label>Timeframe</label><select id="confTf"><option>5m</option><option>1h</option><option selected>4h</option><option value="1d">D</option></select></div>
+  <div class="pp"><div><label>Timeframe</label><select id="confTf"><option>5m</option><option>1h</option><option selected>4h</option><option value="1d">D</option><option value="1w">W</option></select></div>
   <div><label>Repeat</label><select id="confRepeat"><option value="always">every time</option><option value="once">1 time</option></select></div></div>
   <div class="pp" style="margin-top:6px"><div><label>Fire when</label><select id="confStyle"><option value="all">ALL conditions met</option><option value="score">score ≥ threshold</option></select></div>
   <div><label>Threshold (points)</label><input type="number" id="confThr" value="8" min="1" step="1"></div></div>
@@ -365,7 +365,7 @@ function trendCompute(ind){const len=ind.params.len||50,lb=ind.params.lookback||
     pu=iu;pd=id;}
   ind._trend={up,dn,markers};}
 function applyMarkers(){if(chartClean){try{cs.setMarkers([]);}catch(e){}return;}const ms=[];inds.filter(i=>i.type==="trend50"&&shown(i)&&i._trend).forEach(i=>i._trend.markers.forEach(m=>ms.push(m)));
-  if(whaleOn&&whaleFills.length){const sec={"5m":300,"1h":3600,"4h":14400,"1d":86400}[interval]||14400;
+  if(whaleOn&&whaleFills.length){const sec={"5m":300,"1h":3600,"4h":14400,"1d":86400,"1w":604800}[interval]||14400;
     const money=n=>n>=1e6?"$"+(n/1e6).toFixed(1)+"M":"$"+Math.round(n/1e3)+"k";
     whaleFills.forEach(f=>ms.push({time:Math.floor(f.t/1000/sec)*sec,position:f.side==="B"?"belowBar":"aboveBar",color:f.side==="B"?"#26a69a":"#ef5350",shape:f.side==="B"?"arrowUp":"arrowDown",text:money(f.ntl)}));}
   ms.sort((x,y)=>x.time-y.time);try{cs.setMarkers(ms);}catch(e){}}
@@ -491,7 +491,7 @@ function updateMeasureBtn(){const b=document.getElementById("clrM");if(b)b.style
 async function createLine(type,p1,p2){const body={coin,kind:"line",type,p1:{t:Math.round(p1.t),price:p1.price},p2:{t:Math.round(p2.t),price:p2.price},price:p1.price,direction:"cross",alert_enabled:false};const l=await(await fetch("/api/levels",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json();levels.push(l);drawOverlay();renderAlerts();document.getElementById("alerts").classList.add("on");}
 
 /* ---- data/live ---- */
-async function load_(){const days={"5m":7,"1h":45,"4h":120,"1d":200}[interval];const r=await fetch(`/api/candles?coin=${encodeURIComponent(coin)}&interval=${interval}&days=${days}`);bars=await r.json();cs.setData(bars.map(b=>({time:b.time,open:b.open,high:b.high,low:b.low,close:b.close})));vs.setData(bars.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?"#26a69a33":"#ef535033"})));buildAll();if(bars.length)leg(bars.at(-1));}
+async function load_(){const days={"5m":7,"1h":45,"4h":120,"1d":200,"1w":1500}[interval];const r=await fetch(`/api/candles?coin=${encodeURIComponent(coin)}&interval=${interval}&days=${days}`);bars=await r.json();cs.setData(bars.map(b=>({time:b.time,open:b.open,high:b.high,low:b.low,close:b.close})));vs.setData(bars.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?"#26a69a33":"#ef535033"})));buildAll();if(bars.length)leg(bars.at(-1));}
 function connect(){if(ws)try{ws.close();}catch(e){}ws=new WebSocket("wss://api.hyperliquid.xyz/ws");const d=document.getElementById("dot");ws.onopen=()=>{d.className="dot live";ws.send(JSON.stringify({method:"subscribe",subscription:{type:"candle",coin,interval}}));};ws.onclose=()=>d.className="dot";ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.channel==="candle"&&m.data&&m.data.s===coin&&m.data.i===interval)live(m.data);};}
 function live(d){const b={time:Math.floor(d.t/1000),open:+d.o,high:+d.h,low:+d.l,close:+d.c,volume:+d.v},last=bars.at(-1);if(last&&last.time===b.time)bars[bars.length-1]=b;else if(!last||b.time>last.time)bars.push(b);cs.update({time:b.time,open:b.open,high:b.high,low:b.low,close:b.close});vs.update({time:b.time,value:b.volume,color:b.close>=b.open?"#26a69a33":"#ef535033"});leg(b);scheduleDraw(true);}
 
@@ -528,7 +528,7 @@ function renderAlerts(){
   const box=document.getElementById("alList");
   box.innerHTML=mine.length?"":'<div class="mut">no alerts on this symbol</div>';
   const repopts=rv=>`<option value="always"${(rv||'always')==='always'?' selected':''}>every time</option><option value="once"${rv==='once'?' selected':''}>1 time</option>`;
-  const tfopts=tv=>`<option ${tv==='5m'?'selected':''}>5m</option><option ${tv==='1h'?'selected':''}>1h</option><option ${(tv||'4h')==='4h'?'selected':''}>4h</option><option value="1d" ${tv==='1d'?'selected':''}>D</option>`;
+  const tfopts=tv=>`<option ${tv==='5m'?'selected':''}>5m</option><option ${tv==='1h'?'selected':''}>1h</option><option ${(tv||'4h')==='4h'?'selected':''}>4h</option><option value="1d" ${tv==='1d'?'selected':''}>D</option><option value="1w" ${tv==='1w'?'selected':''}>W</option>`;
   mine.forEach(l=>{const d=document.createElement("div");d.className="lv";
     if(l.kind==="confluence"||l.kind==="score"){const desc=(l.conditions||[]).map(condText).join(" + ").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
       const icon=l.kind==="score"?`🎯 ≥${l.threshold||Math.max(1,(l.conditions||[]).length-2)}/${(l.conditions||[]).length}`:"🔗";
@@ -788,7 +788,7 @@ const COND_TYPES={
 function avwapLabel(t){const d=new Date(t*1000);return `${["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][d.getUTCMonth()]} ${d.getUTCDate()}`;}
 function condText(c){const t=c.type,a=c.op==="near"?`≈ (±${c.within||0.5}%)`:(c.op==="<"?"below":"above"),tf=c.tf?` [${c.tf}]`:"";if(t==="price")return`price ${a} ${c.value}`+tf;if(t==="funding")return`funding ${a} ${c.value}`+tf;if(t==="oi")return`OI ${a} ${c.value}`+tf;if(t==="vwap")return`price ${a} VWAP(${c.anchor||"week"})`+tf;if(t==="avwap")return`price ${a} aVWAP(${avwapLabel(c.anchorT)})`+tf;if(t==="ema")return`price ${a} EMA${c.period||45}`+tf;if(t==="rsi")return`RSI ${a} ${c.value}`+tf;if(t==="rsiband")return`RSI ${c.lo??40}–${c.hi??65}`+tf;if(t==="volspike")return`vol ≥${c.mult||1.5}× avg${String(c.green??"1")==="1"?" green":""}`+tf;if(t==="opt")return`price ${a} ${({max_pain:"max pain",call_wall:"call wall",put_wall:"put wall",gamma_flip:"gamma flip"})[c.level]||c.level}`;if(t==="optroom")return`room to call wall ≥${c.value||3}%`;if(t==="buywall")return`buy wall ≥$${c.min||1}M within ${c.pct||1.5}%`;if(t==="nosellwall")return`no sell wall ≥$${c.min||3}M within ${c.pct||1}%`;if(t==="pattern")return`🕯 ${c.name}`;if(t==="notrend")return`no-trend ${c.bars||5} bars (EMA${c.emaLen||50})`+tf;if(t==="trend")return`${c.dir||"any"} trend (EMA${c.emaLen||50})`+tf;if(t==="ics")return`ICS breakout ${c.dir||"any"}`+tf;return t;}
 function renderCondFields(box,type,vals){box.innerHTML="";COND_TYPES[type].fields.forEach(fl=>{let el;if(fl.dyn==="avwap"){el=document.createElement("select");const av=inds.filter(i=>i.type==="vwapa"&&(!i.coin||i.coin===coin));el.innerHTML=av.length?av.map(i=>`<option value="${i.params.anchorT}">⚓ ${avwapLabel(i.params.anchorT)}</option>`).join(""):`<option value="">— draw one with ⚓ first —</option>`;}else if(fl.sel){el=document.createElement("select");el.innerHTML=fl.sel.map(o=>typeof o==="object"?`<option value="${o.v}">${o.l}</option>`:`<option>${o}</option>`).join("");}else{el=document.createElement("input");el.type="number";el.placeholder=fl.ph||"";if(fl.def!=null)el.value=fl.def;}if(vals&&vals[fl.k]!=null)el.value=vals[fl.k];el.dataset.k=fl.k;el.className="cf";box.appendChild(el);});}
-function condRow(vals){const w=document.createElement("div");w.className="condrow";const ts=document.createElement("select");ts.className="ctype";ts.innerHTML=Object.entries(COND_TYPES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join("");if(vals&&vals.type&&COND_TYPES[vals.type])ts.value=vals.type;const fields=document.createElement("span");fields.className="cfields";const tfs=document.createElement("select");tfs.className="ctf";tfs.title="timeframe for this condition (blank = alert timeframe)";tfs.innerHTML=`<option value="">alert tf</option><option>5m</option><option>1h</option><option>4h</option><option value="1d">D</option>`;if(vals&&vals.tf)tfs.value=vals.tf;const rm=document.createElement("span");rm.className="cx";rm.textContent="✕";rm.onclick=()=>w.remove();ts.onchange=()=>renderCondFields(fields,ts.value);w.appendChild(ts);w.appendChild(fields);w.appendChild(tfs);w.appendChild(rm);renderCondFields(fields,ts.value,vals);return w;}
+function condRow(vals){const w=document.createElement("div");w.className="condrow";const ts=document.createElement("select");ts.className="ctype";ts.innerHTML=Object.entries(COND_TYPES).map(([k,v])=>`<option value="${k}">${v.label}</option>`).join("");if(vals&&vals.type&&COND_TYPES[vals.type])ts.value=vals.type;const fields=document.createElement("span");fields.className="cfields";const tfs=document.createElement("select");tfs.className="ctf";tfs.title="timeframe for this condition (blank = alert timeframe)";tfs.innerHTML=`<option value="">alert tf</option><option>5m</option><option>1h</option><option>4h</option><option value="1d">D</option><option value="1w">W</option>`;if(vals&&vals.tf)tfs.value=vals.tf;const rm=document.createElement("span");rm.className="cx";rm.textContent="✕";rm.onclick=()=>w.remove();ts.onchange=()=>renderCondFields(fields,ts.value);w.appendChild(ts);w.appendChild(fields);w.appendChild(tfs);w.appendChild(rm);renderCondFields(fields,ts.value,vals);return w;}
 /* one-tap 🟢 LONG setup — the CLEAN CORE only (solid, testable math; no
    heuristics): bias = 1d trend up + above EMA200 · location = pullback near
    weekly VWAP · trigger = volume-confirmed green close · sanity = RSI not
@@ -822,7 +822,7 @@ function runScan(){
     <option value="down">downtrend</option>
     <option value="notrend">no-trend (chop)</option>
     <option value="trend">all trend states</option></select></div>
-  <div><label>Timeframe</label><select id="scanTf"><option>1h</option><option selected>4h</option><option value="1d">D</option></select></div></div>
+  <div><label>Timeframe</label><select id="scanTf"><option>1h</option><option selected>4h</option><option value="1d">D</option><option value="1w">W</option></select></div></div>
   <div class="pp" style="margin-top:6px"><div><label>Coins (by volume)</label><select id="scanN"><option>12</option><option>20</option></select></div>
   <div style="display:flex;align-items:flex-end"><button class="go" id="scanGo" style="margin:0">Scan</button></div></div>
   <div class="mut" style="font-size:10px;margin-top:4px">trend = your trend-vs-EMA50 logic (70% of last 50 closes) on closed candles</div>
@@ -992,7 +992,7 @@ function init(){mkChart();fillTypes();chips();
   document.getElementById("confX").onclick=closeConf;
   loadMute();
   document.getElementById("testBtn").onclick=async()=>{const r=document.getElementById("testRes");r.textContent="sending…";try{const d=await(await fetch("/api/test",{method:"POST"})).json();r.textContent=(d.ok?"✅ ":"⚠️ ")+d.detail;r.style.color=d.ok?"#26a69a":"#ef5350";}catch(e){r.textContent="⚠️ "+e;r.style.color="#ef5350";}};
-  document.addEventListener("keydown",e=>{if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT")return;const m={"1":"5m","2":"1h","3":"4h","4":"1d"};if(m[e.key])setTF(m[e.key]);const tk={t:"trend",r:"ray",e:"extended",m:"measure",f:"fib",a:"vwapanchor",h:"level",c:"cursor"};if(tk[e.key])setTool(tk[e.key]);if(e.key==="i")document.getElementById("addBtn").click();if(e.key==="v")toggleCleanChart();if(e.key==="Escape"){closePop();closeConf();clearMeasure();setTool("cursor");document.getElementById("alerts").classList.remove("on");}});
+  document.addEventListener("keydown",e=>{if(e.target.tagName==="INPUT"||e.target.tagName==="SELECT")return;const m={"1":"5m","2":"1h","3":"4h","4":"1d","5":"1w"};if(m[e.key])setTF(m[e.key]);const tk={t:"trend",r:"ray",e:"extended",m:"measure",f:"fib",a:"vwapanchor",h:"level",c:"cursor"};if(tk[e.key])setTool(tk[e.key]);if(e.key==="i")document.getElementById("addBtn").click();if(e.key==="v")toggleCleanChart();if(e.key==="Escape"){closePop();closeConf();clearMeasure();setTool("cursor");document.getElementById("alerts").classList.remove("on");}});
   document.addEventListener("click",e=>{const p=document.getElementById("indPop");if(p.classList.contains("on")&&!p.contains(e.target)&&e.target.id!=="addBtn"&&!e.target.closest(".chip"))closePop();});
   load_().then(loadIndicators).then(loadLevels).then(connect);loadWatchlist();}
 function setTF(i){interval=i;document.querySelectorAll("#tf b").forEach(x=>x.classList.toggle("on",x.dataset.i===i));load_().then(()=>{connect();applyMarkers();});}

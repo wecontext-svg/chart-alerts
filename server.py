@@ -1185,7 +1185,7 @@ async def fetch_ctx(session, coins):
 
 # candle cache so the daemon doesn't re-fetch every poll (closed candles change per bar)
 _candles_cache = {}
-_CANDLE_DAYS = {"5m": 8, "1h": 20, "4h": 60, "1d": 220}
+_CANDLE_DAYS = {"5m": 8, "1h": 20, "4h": 60, "1d": 220, "1w": 1500}
 
 
 async def get_candles(session, coin, interval):
@@ -2014,7 +2014,7 @@ async def api_scan(request):
         n = 12
     mode = request.query.get("mode", "score")
     tf = request.query.get("tf", "4h")
-    if tf not in ("1h", "4h", "1d"):
+    if tf not in ("1h", "4h", "1d", "1w"):
         tf = "4h"
     if mode == "score":
         results = await scan_setups(request.app["session"], n)
