@@ -1185,7 +1185,7 @@ async def fetch_ctx(session, coins):
 
 # candle cache so the daemon doesn't re-fetch every poll (closed candles change per bar)
 _candles_cache = {}
-_CANDLE_DAYS = {"5m": 8, "1h": 20, "4h": 60, "1d": 220, "1w": 1500}
+_CANDLE_DAYS = {"1m": 1, "5m": 8, "1h": 20, "4h": 60, "1d": 220, "1w": 1500}
 
 
 async def get_candles(session, coin, interval):
@@ -1405,6 +1405,36 @@ def ctx_from(l, cx, candle_map, tf=None):
             "funding": cx.get("funding") or 0.0, "oi": cx.get("oi") or 0.0}
 
 
+# Trading-session windows (UTC minutes-of-day). Sydney wraps past midnight.
+_SESSIONS = {"ny": (780, 1320), "london": (420, 960),
+             "tokyo": (0, 540), "sydney": (1260, 360)}
+
+
+def _last_session_range(candles, sess):
+    """(high, low) of the most recently COMPLETED session in `candles`
+    (the still-forming session is excluded). candles: dicts with t(ms),h,l.
+    Best with an intraday timeframe (5m/15m/1h)."""
+    win = _SESSIONS.get(sess, _SESSIONS["ny"])
+    s, e = win
+
+    def in_ses(ms):
+        d = dt.datetime.fromtimestamp(ms / 1000, dt.timezone.utc)
+        m = d.hour * 60 + d.minute
+        return (s <= m < e) if s < e else (m >= s or m < e)
+
+    ranges, cur = [], None
+    for c in candles:
+        if in_ses(c["t"]):
+            if cur is None:
+                cur = [c["h"], c["l"]]
+            else:
+                cur[0] = max(cur[0], c["h"]); cur[1] = min(cur[1], c["l"])
+        elif cur is not None:
+            ranges.append(cur); cur = None
+    # cur (still forming) intentionally not appended -> last COMPLETED session
+    return (ranges[-1][0], ranges[-1][1]) if ranges else (None, None)
+
+
 def eval_condition(cond, ctx):
     # Must NEVER raise — an exception here aborts the whole alert loop and
     # silently blocks every alert. Missing data => condition simply not met.
@@ -1494,6 +1524,17 @@ def eval_condition(cond, ctx):
                            and (a["px"] - price) / price * 100.0 <= pct
                            and a["notional"] >= mn
                            for a in bk.get("asks") or [])
+        if t == "session":
+            # breakout of the most recent completed session's high/low
+            hi, lo = _last_session_range(ctx["candles"], cond.get("sess", "ny"))
+            if hi is None or price is None:
+                return False
+            side = cond.get("side", "up")
+            if side == "up":
+                return price > hi
+            if side == "down":
+                return price < lo
+            return price > hi or price < lo
         if t == "pattern":
             return _pattern(ctx["candles"], cond.get("name", ""))
         if t == "notrend":
@@ -1598,6 +1639,10 @@ def cond_text(c):
         return f"buy wall ≥${c.get('min', 1)}M within {c.get('pct', 1.5)}%"
     if t == "nosellwall":
         return f"no sell wall ≥${c.get('min', 3)}M within {c.get('pct', 1.0)}%"
+    if t == "session":
+        nm = {"ny": "NY", "london": "LDN", "tokyo": "TYO", "sydney": "SYD"}.get(c.get("sess"), c.get("sess"))
+        sd = c.get("side", "up")
+        return f"{nm} session {'break low ↓' if sd == 'down' else 'break ⇅' if sd == 'either' else 'break high ↑'}" + tf
     if t == "pattern":
         return f"candle = {c.get('name')}" + tf
     if t == "notrend":
