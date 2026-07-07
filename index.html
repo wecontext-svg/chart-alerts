@@ -75,6 +75,16 @@
   #ftPop{width:225px;right:8px;top:44px;}
   #wlPop{width:258px;left:8px;top:44px;max-height:80vh;overflow:auto;}
   #opPop{width:235px;right:8px;top:44px;}
+  /* ● LIVE badge (bottom-left, above the time axis) */
+  #liveBadge{position:absolute;left:8px;bottom:34px;z-index:15;display:inline-flex;align-items:center;gap:5px;
+    padding:3px 9px;border-radius:20px;font-size:10px;font-weight:700;letter-spacing:.5px;pointer-events:none;
+    background:#141a26cc;border:1px solid var(--border);backdrop-filter:blur(4px);}
+  #liveBadge .lvdot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;}
+  #liveBadge.lv-on{color:#2ec27e;}
+  #liveBadge.lv-on .lvdot{background:#2ec27e;box-shadow:0 0 6px #2ec27e99;animation:lvpulse 1.6s ease-in-out infinite;}
+  #liveBadge.lv-off{color:var(--muted);}
+  #liveBadge.lv-off .lvdot{background:var(--muted);}
+  @keyframes lvpulse{0%,100%{opacity:1;}50%{opacity:.35;}}
   #wlBtn.on{background:var(--gold);border-color:var(--gold);color:#1a1200;}
   .wlrow{display:flex;align-items:center;gap:8px;padding:8px 6px;margin:0 -6px;border-radius:6px;cursor:pointer;border-top:1px solid var(--border);}
   .wlrow:first-child{border-top:0;}
@@ -223,6 +233,7 @@
 <canvas id="ovl"></canvas>
 <div id="touch"></div>
 <div id="toast"></div>
+<div id="liveBadge" class="lv-off"><span class="lvdot"></span>connecting…</div>
 
 <div class="pop" id="indPop">
   <div class="ph"><b>+ƒ Indicator</b><span class="cx" data-close="indPop">✕</span></div>
@@ -525,7 +536,17 @@ async function createLine(type,p1,p2){const body={coin,kind:"line",type,p1:{t:Ma
 
 /* ---- data/live ---- */
 async function load_(){const days={"1m":2,"5m":7,"1h":45,"4h":120,"1d":200,"1w":1500}[interval];const r=await fetch(`/api/candles?coin=${encodeURIComponent(coin)}&interval=${interval}&days=${days}`);bars=await r.json();cs.setData(bars.map(b=>({time:b.time,open:b.open,high:b.high,low:b.low,close:b.close})));vs.setData(bars.map(b=>({time:b.time,value:b.volume,color:b.close>=b.open?"#26a69a33":"#ef535033"})));buildAll();if(bars.length)leg(bars.at(-1));}
-function connect(){if(ws)try{ws.close();}catch(e){}ws=new WebSocket("wss://api.hyperliquid.xyz/ws");const d=document.getElementById("dot");ws.onopen=()=>{d.className="dot live";ws.send(JSON.stringify({method:"subscribe",subscription:{type:"candle",coin,interval}}));};ws.onclose=()=>d.className="dot";ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.channel==="candle"&&m.data&&m.data.s===coin&&m.data.i===interval)live(m.data);};}
+function setLiveBadge(state){const b=document.getElementById("liveBadge");if(!b)return;
+  if(state==="live"){b.className="lv-on";b.innerHTML='<span class="lvdot"></span>LIVE';}
+  else if(state==="re"){b.className="lv-off";b.innerHTML='<span class="lvdot"></span>reconnecting…';}
+  else{b.className="lv-off";b.innerHTML='<span class="lvdot"></span>connecting…';}}
+function connect(){
+  if(ws){ws.onclose=null;try{ws.close();}catch(e){}}  // deliberate close: no stale reconnect
+  setLiveBadge("conn");
+  ws=new WebSocket("wss://api.hyperliquid.xyz/ws");const d=document.getElementById("dot");
+  ws.onopen=()=>{d.className="dot live";setLiveBadge("live");ws.send(JSON.stringify({method:"subscribe",subscription:{type:"candle",coin,interval}}));};
+  ws.onclose=()=>{d.className="dot";setLiveBadge("re");setTimeout(()=>{if(!ws||ws.readyState===WebSocket.CLOSED)connect();},5000);};  // auto-reconnect
+  ws.onmessage=e=>{const m=JSON.parse(e.data);if(m.channel==="candle"&&m.data&&m.data.s===coin&&m.data.i===interval)live(m.data);};}
 function live(d){const b={time:Math.floor(d.t/1000),open:+d.o,high:+d.h,low:+d.l,close:+d.c,volume:+d.v},last=bars.at(-1);if(last&&last.time===b.time)bars[bars.length-1]=b;else if(!last||b.time>last.time)bars.push(b);cs.update({time:b.time,open:b.open,high:b.high,low:b.low,close:b.close});vs.update({time:b.time,value:b.volume,color:b.close>=b.open?"#26a69a33":"#ef535033"});leg(b);scheduleDraw(true);}
 
 /* ---- indicators persist + chips ---- */
